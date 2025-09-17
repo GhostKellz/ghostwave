@@ -1,19 +1,47 @@
 use anyhow::Result;
+use tracing::{info, debug};
 
 use crate::config::NoiseSuppressionConfig;
+use crate::rtx_acceleration::RtxAccelerator;
 
 pub struct NoiseProcessor {
     config: NoiseSuppressionConfig,
     gate: NoiseGate,
     spectral_filter: SpectralFilter,
+    rtx_accelerator: Option<RtxAccelerator>,
 }
 
 impl NoiseProcessor {
     pub fn new(config: &NoiseSuppressionConfig) -> Result<Self> {
+        // Try to initialize RTX acceleration
+        let rtx_accelerator = match RtxAccelerator::new() {
+            Ok(accelerator) => {
+                if accelerator.is_rtx_available() {
+                    if let Some(caps) = accelerator.get_capabilities() {
+                        info!("🚀 RTX acceleration enabled:");
+                        info!("   GPU: Compute {}.{}", caps.compute_capability.0, caps.compute_capability.1);
+                        info!("   Memory: {:.1} GB", caps.memory_gb);
+                        info!("   Tensor Cores: {}", caps.has_tensor_cores);
+                        info!("   RTX Voice Support: {}", caps.supports_rtx_voice);
+                    }
+                    Some(accelerator)
+                } else {
+                    info!("💻 Using CPU processing (RTX not available)");
+                    Some(accelerator) // Keep for fallback
+                }
+            }
+            Err(e) => {
+                info!("⚠️  RTX initialization failed: {}", e);
+                info!("💻 Using CPU-only processing");
+                None
+            }
+        };
+
         Ok(Self {
             config: config.clone(),
             gate: NoiseGate::new(config.gate_threshold, config.release_time),
             spectral_filter: SpectralFilter::new(config.strength),
+            rtx_accelerator,
         })
     }
 
@@ -25,11 +53,43 @@ impl NoiseProcessor {
 
         let mut temp_buffer = vec![0.0f32; input.len()];
 
-        self.spectral_filter.process(input, &mut temp_buffer);
+        // Try RTX acceleration first, fall back to CPU if needed
+        if let Some(ref rtx) = self.rtx_accelerator {
+            if rtx.is_rtx_available() {
+                debug!("Processing with RTX acceleration");
+                rtx.process_spectral_denoising(input, &mut temp_buffer, self.config.strength)?;
+            } else {
+                debug!("Processing with CPU spectral filter");
+                self.spectral_filter.process(input, &mut temp_buffer);
+            }
+        } else {
+            debug!("Processing with CPU spectral filter (no RTX)");
+            self.spectral_filter.process(input, &mut temp_buffer);
+        }
 
+        // Apply noise gate (always CPU for now)
         self.gate.process(&temp_buffer, output);
 
         Ok(())
+    }
+
+    pub fn get_processing_mode(&self) -> String {
+        if let Some(ref rtx) = self.rtx_accelerator {
+            if rtx.is_rtx_available() {
+                format!("RTX GPU + CPU Gate")
+            } else {
+                "CPU Only".to_string()
+            }
+        } else {
+            "CPU Only".to_string()
+        }
+    }
+
+    pub fn has_rtx_acceleration(&self) -> bool {
+        self.rtx_accelerator
+            .as_ref()
+            .map(|rtx| rtx.is_rtx_available())
+            .unwrap_or(false)
     }
 }
 
