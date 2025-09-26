@@ -1,0 +1,68 @@
+# Maintainer: GhostWave Project
+pkgname=ghostwave-core
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="GhostWave DSP Core Library - Real-time audio processing components"
+arch=('x86_64')
+url="https://github.com/ghostkellz/ghostwave"
+license=('MIT OR Apache-2.0')
+depends=('pipewire' 'alsa-lib' 'jack2')
+makedepends=('rust' 'cargo')
+optdepends=(
+    'nvidia-utils: for RTX acceleration'
+    'cuda: for GPU acceleration'
+)
+provides=('ghostwave-core')
+conflicts=('ghostwave-core-git')
+source=("ghostwave-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+build() {
+    cd "ghostwave-$pkgver/ghostwave-core"
+
+    # Build with optimizations
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+
+    # Build core library with all backends
+    cargo build --release --features "pipewire-backend,alsa-backend,jack-backend,cpal-backend,nvidia-rtx"
+}
+
+check() {
+    cd "ghostwave-$pkgver/ghostwave-core"
+    cargo test --release
+}
+
+package() {
+    cd "ghostwave-$pkgver/ghostwave-core"
+
+    # Install library (this would be for static linking or development)
+    install -dm755 "$pkgdir/usr/lib"
+    install -dm755 "$pkgdir/usr/include/ghostwave"
+
+    # Install header files for C FFI (if implemented)
+    # install -Dm644 include/*.h "$pkgdir/usr/include/ghostwave/"
+
+    # Install pkg-config file
+    install -dm755 "$pkgdir/usr/lib/pkgconfig"
+    cat > "$pkgdir/usr/lib/pkgconfig/ghostwave-core.pc" << EOF
+prefix=/usr
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: GhostWave Core
+Description: Real-time audio processing DSP library
+Version: $pkgver
+Libs: -L\${libdir} -lghostwave_core
+Cflags: -I\${includedir}
+EOF
+
+    # Install documentation
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md" || true
+
+    # Install license
+    install -Dm644 ../LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT" || true
+    install -Dm644 ../LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE" || true
+}

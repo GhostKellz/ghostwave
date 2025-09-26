@@ -11,6 +11,7 @@ pub const TARGET_LATENCY_MS: u32 = 15;
 pub struct LockFreeAudioBuffer {
     buffer: Vec<f32>,
     capacity: usize,
+    channels: u8,
     write_pos: AtomicUsize,
     read_pos: AtomicUsize,
     sample_rate: u32,
@@ -18,11 +19,18 @@ pub struct LockFreeAudioBuffer {
 
 impl LockFreeAudioBuffer {
     pub fn new(capacity_frames: usize, sample_rate: u32) -> Self {
-        info!("Creating lock-free audio buffer: {} frames, {}Hz", capacity_frames, sample_rate);
+        Self::new_with_channels(capacity_frames, sample_rate, 1)
+    }
+
+    pub fn new_with_channels(capacity_frames: usize, sample_rate: u32, channels: u8) -> Self {
+        let total_samples = capacity_frames * channels as usize;
+        info!("Creating lock-free audio buffer: {} frames, {}Hz, {} channels ({} samples)",
+              capacity_frames, sample_rate, channels, total_samples);
 
         Self {
-            buffer: vec![0.0; capacity_frames],
-            capacity: capacity_frames,
+            buffer: vec![0.0; total_samples],
+            capacity: total_samples,
+            channels,
             write_pos: AtomicUsize::new(0),
             read_pos: AtomicUsize::new(0),
             sample_rate,
@@ -151,6 +159,59 @@ impl LockFreeAudioBuffer {
         } else {
             self.capacity - read_pos + write_pos
         }
+    }
+
+    /// Clear the buffer by resetting read/write positions
+    pub fn clear(&self) {
+        self.read_pos.store(0, Ordering::Release);
+        self.write_pos.store(0, Ordering::Release);
+    }
+
+    /// Get buffer utilization as a percentage (0.0 to 1.0)
+    pub fn utilization(&self) -> f32 {
+        let available = self.available_for_read();
+        available as f32 / self.capacity as f32
+    }
+
+    /// Check if buffer is nearly full (>90% capacity)
+    pub fn is_nearly_full(&self) -> bool {
+        self.utilization() > 0.9
+    }
+
+    /// Check if buffer is nearly empty (<10% capacity)
+    pub fn is_nearly_empty(&self) -> bool {
+        self.utilization() < 0.1
+    }
+
+    /// Get number of channels
+    pub fn channels(&self) -> u8 {
+        self.channels
+    }
+
+    /// Get sample rate
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Get capacity in frames (not samples)
+    pub fn capacity_frames(&self) -> usize {
+        self.capacity / self.channels as usize
+    }
+
+    /// Non-blocking write - returns immediately if buffer is full
+    pub fn try_write(&self, data: &[f32]) -> Result<usize> {
+        if self.available_for_write() == 0 {
+            return Ok(0);
+        }
+        self.write(data)
+    }
+
+    /// Non-blocking read - returns immediately if buffer is empty
+    pub fn try_read(&self, data: &mut [f32]) -> Result<usize> {
+        if self.available_for_read() == 0 {
+            return Ok(0);
+        }
+        self.read(data)
     }
 }
 

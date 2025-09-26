@@ -1,0 +1,71 @@
+# Maintainer: GhostWave Project
+pkgname=ghostwave
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Linux RTX Voice Alternative - Real-time audio processing with noise suppression"
+arch=('x86_64')
+url="https://github.com/ghostkellz/ghostwave"
+license=('MIT OR Apache-2.0')
+depends=('pipewire' 'alsa-lib' 'jack2')
+makedepends=('rust' 'cargo')
+optdepends=(
+    'nvidia-utils: for RTX acceleration'
+    'cuda: for GPU acceleration'
+    'phantomlink: for professional mixing integration'
+    'nvcontrol: for NVIDIA GPU management'
+)
+provides=('ghostwave')
+conflicts=('ghostwave-git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+build() {
+    cd "$pkgname-$pkgver"
+
+    # Build with optimizations
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+
+    # Enable all audio backends
+    cargo build --release --features nvidia-rtx
+
+    # Generate man page and shell completions
+    mkdir -p completions man
+    ./target/release/ghostwave --generate-completion bash > completions/ghostwave.bash
+    ./target/release/ghostwave --generate-completion zsh > completions/_ghostwave
+    ./target/release/ghostwave --generate-completion fish > completions/ghostwave.fish
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # Install binary
+    install -Dm755 target/release/ghostwave "$pkgdir/usr/bin/ghostwave"
+
+    # Install systemd user service
+    install -Dm644 systemd/ghostwave.service "$pkgdir/usr/lib/systemd/user/ghostwave.service"
+
+    # Install shell completions
+    install -Dm644 completions/ghostwave.bash "$pkgdir/usr/share/bash-completion/completions/ghostwave"
+    install -Dm644 completions/_ghostwave "$pkgdir/usr/share/zsh/site-functions/_ghostwave"
+    install -Dm644 completions/ghostwave.fish "$pkgdir/usr/share/fish/vendor_completions.d/ghostwave.fish"
+
+    # Install configuration directory structure
+    install -dm755 "$pkgdir/etc/ghostwave"
+    install -Dm644 examples/config.toml "$pkgdir/etc/ghostwave/config.toml.example"
+
+    # Install documentation
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 docs/phantomlink-integration.md "$pkgdir/usr/share/doc/$pkgname/phantomlink-integration.md"
+    install -Dm644 docs/nvcontrol-integration.md "$pkgdir/usr/share/doc/$pkgname/nvcontrol-integration.md"
+
+    # Install license
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

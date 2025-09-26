@@ -1,0 +1,44 @@
+[Unit]
+Description=GhostWave Real-Time Audio Processor
+Documentation=https://github.com/ghostkellz/ghostwave
+After=pipewire.service pulseaudio.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/ghostwave --profile balanced --realtime --pipewire-module
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+User=%i
+Group=audio
+
+# Real-time optimization
+Nice=-20
+IOSchedulingClass=1
+IOSchedulingPriority=4
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=no
+LockPersonality=yes
+
+# Resource limits
+LimitMEMLOCK=infinity
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Environment
+Environment=HOME=%h
+Environment=XDG_CONFIG_HOME=%h/.config
+Environment=GHOSTWAVE_LOG_LEVEL=info
+
+[Install]
+WantedBy=default.target

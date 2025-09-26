@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use tracing::{info, warn};
+use ghostwave_core::latency_optimizer::{LatencyOptimizer, LatencyConfig};
 
 mod alsa_module;
 mod audio;
@@ -19,66 +20,195 @@ mod systemd;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Processing profile to use
     #[arg(short, long, default_value = "balanced")]
     profile: String,
 
+    /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
 
-    #[arg(long)]
-    pipewire_module: bool,
+    /// Enable quiet mode (errors only)
+    #[arg(short, long)]
+    quiet: bool,
 
-    #[arg(long)]
-    phantomlink: bool,
-
+    /// Buffer size in frames (32-4096, must be power of 2)
     #[arg(long)]
     frames: Option<u32>,
 
+    /// Sample rate in Hz (44100, 48000, 96000, 192000)
     #[arg(long)]
     samplerate: Option<u32>,
 
+    /// Input device name or "auto" for automatic selection
     #[arg(long)]
-    install_pipewire: bool,
+    input: Option<String>,
 
+    /// Output device name or "auto" for automatic selection
     #[arg(long)]
-    install_systemd: bool,
+    output: Option<String>,
 
+    /// Number of audio channels (1=mono, 2=stereo)
     #[arg(long)]
-    uninstall: bool,
+    channels: Option<u8>,
 
+    /// Configuration file path (overrides default)
     #[arg(long)]
-    service_start: bool,
+    config: Option<String>,
 
+    /// Run in PipeWire module mode
     #[arg(long)]
-    service_stop: bool,
+    pipewire_module: bool,
 
+    /// Run in PhantomLink integration mode
     #[arg(long)]
-    service_status: bool,
+    phantomlink: bool,
 
+    /// Enable NVIDIA RTX acceleration
     #[arg(long)]
-    ipc_server: bool,
+    nvidia_rtx: bool,
 
-    #[arg(long)]
-    doctor: bool,
-
-    #[arg(long)]
-    bench: bool,
-
+    /// Audio backend to use (auto, pipewire, alsa, jack, cpal)
     #[arg(long)]
     backend: Option<String>,
 
+    /// Use ALSA backend directly
     #[arg(long)]
     alsa: bool,
 
+    /// Use JACK backend
     #[arg(long)]
     jack: bool,
+
+    /// Enable IPC server for remote control
+    #[arg(long)]
+    ipc_server: bool,
+
+    /// IPC socket path
+    #[arg(long)]
+    ipc_socket: Option<String>,
+
+    /// Run system diagnostics
+    #[arg(long)]
+    doctor: bool,
+
+    /// Run performance benchmark
+    #[arg(long)]
+    bench: bool,
+
+    /// Validate configuration and exit
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Install PipeWire autoload module
+    #[arg(long)]
+    install_pipewire: bool,
+
+    /// Install systemd user service
+    #[arg(long)]
+    install_systemd: bool,
+
+    /// Uninstall all components
+    #[arg(long)]
+    uninstall: bool,
+
+    /// Start systemd service
+    #[arg(long)]
+    service_start: bool,
+
+    /// Stop systemd service
+    #[arg(long)]
+    service_stop: bool,
+
+    /// Show systemd service status
+    #[arg(long)]
+    service_status: bool,
+
+    /// Enable real-time priority
+    #[arg(long)]
+    realtime: bool,
+
+    /// CPU cores for affinity (comma-separated)
+    #[arg(long)]
+    cpu_affinity: Option<String>,
+
+    /// Target latency in milliseconds
+    #[arg(long)]
+    latency: Option<f32>,
+
+    /// Memory pool size for audio buffers
+    #[arg(long)]
+    memory_pool_size: Option<usize>,
+
+    /// Disable all processing (passthrough mode)
+    #[arg(long)]
+    passthrough: bool,
+
+    /// Show version information and exit
+    #[arg(long)]
+    version: bool,
+
+    /// List available profiles
+    #[arg(long)]
+    list_profiles: bool,
+
+    /// List available devices
+    #[arg(long)]
+    list_devices: bool,
+
+    /// Generate shell completion script
+    #[arg(long)]
+    generate_completion: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let level = if args.verbose { "debug" } else { "info" };
+    // Handle special commands first
+    if args.version {
+        println!("GhostWave {}", env!("CARGO_PKG_VERSION"));
+        println!("Linux RTX Voice Alternative");
+        println!("Build: {} ({})", env!("VERGEN_BUILD_DATE"), env!("VERGEN_GIT_SHA"));
+        return Ok(());
+    }
+
+    if args.list_profiles {
+        println!("Available processing profiles:");
+        println!("  balanced   - Balanced noise reduction for everyday use");
+        println!("  streaming  - Aggressive noise reduction for streaming");
+        println!("  studio     - Minimal processing for professional recording");
+        return Ok(());
+    }
+
+    if args.list_devices {
+        println!("Available audio devices:");
+        let detector = device_detection::DeviceDetector::new();
+        let devices = detector.detect_devices().await?;
+
+        for device in devices {
+            println!("  • {} {} ({})", device.vendor, device.model, device.name);
+            if device.is_xlr_interface {
+                println!("    ✅ XLR Interface - Profile: {}", device.recommended_profile);
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(shell) = args.generate_completion {
+        generate_completions(&shell)?;
+        return Ok(());
+    }
+
+    // Set up logging based on verbosity
+    let level = if args.quiet {
+        "error"
+    } else if args.verbose {
+        "debug"
+    } else {
+        "info"
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(format!("ghostwave={}", level))
         .init();
@@ -167,26 +297,91 @@ async fn main() -> Result<()> {
         return run_audio_benchmark(config).await;
     }
 
+    // Load configuration with CLI overrides
+    let mut config = if let Some(config_path) = &args.config {
+        config::Config::load_from_file(config_path)?
+    } else {
+        config::Config::load(&args.profile)?
+    };
+
+    // Apply CLI overrides
+    if let Some(sample_rate) = args.samplerate {
+        config.audio.sample_rate = sample_rate;
+    }
+    if let Some(frames) = args.frames {
+        config.audio.buffer_size = frames;
+    }
+    if let Some(channels) = args.channels {
+        config.audio.channels = channels;
+    }
+    if let Some(ref input) = args.input {
+        config.audio.input_device = Some(input.clone());
+    }
+    if let Some(ref output) = args.output {
+        config.audio.output_device = Some(output.clone());
+    }
+    if let Some(ref backend) = args.backend {
+        config.audio.backend = backend.clone();
+    }
+    if let Some(latency) = args.latency {
+        config.audio.target_latency_ms = latency;
+    }
+
+    // Dry-run validation
+    if args.dry_run {
+        info!("🧪 Dry-run validation mode");
+        info!("Configuration: {}Hz, {} frames, {} channels",
+              config.audio.sample_rate, config.audio.buffer_size, config.audio.channels);
+
+        // Validate configuration
+        if config.audio.buffer_size < 32 || config.audio.buffer_size > 4096 {
+            return Err(anyhow::anyhow!("Buffer size must be between 32-4096 frames"));
+        }
+
+        if !config.audio.buffer_size.is_power_of_two() {
+            return Err(anyhow::anyhow!("Buffer size must be power of 2"));
+        }
+
+        if ![44100, 48000, 96000, 192000].contains(&config.audio.sample_rate) {
+            return Err(anyhow::anyhow!("Unsupported sample rate"));
+        }
+
+        info!("✅ Configuration validation passed");
+        return Ok(());
+    }
+
     // Backend selection
     if args.alsa {
         info!("🔊 Starting GhostWave with ALSA direct backend");
-        let config = config::Config::load(&args.profile)?
-            .with_overrides(args.samplerate, args.frames);
         return alsa_module::run_alsa_mode(config).await;
     }
 
     if args.jack {
         info!("🎶 Starting GhostWave with JACK professional backend");
-        let config = config::Config::load(&args.profile)?
-            .with_overrides(args.samplerate, args.frames);
         return jack_module::run_jack_mode(config).await;
     }
 
     info!("🎧 GhostWave starting - NVIDIA RTX Voice for Linux");
     info!("Profile: {}", args.profile);
 
-    let config = config::Config::load(&args.profile)?
-        .with_overrides(args.samplerate, args.frames);
+    // Apply real-time optimizations if requested
+    if args.realtime {
+        let latency_config = LatencyConfig {
+            target_latency_ms: config.audio.target_latency_ms,
+            sample_rate: config.audio.sample_rate,
+            buffer_size: config.audio.buffer_size as usize,
+            buffer_count: 2,
+            aggressive_mode: true,
+            cpu_affinity: args.cpu_affinity.as_ref().map(|cores| {
+                cores.split(',').filter_map(|s| s.trim().parse().ok()).collect()
+            }),
+        };
+
+        let mut optimizer = LatencyOptimizer::new(latency_config);
+        if let Err(e) = optimizer.optimize() {
+            warn!("RT optimization failed: {}. Continuing with normal priority.", e);
+        }
+    }
 
     if args.ipc_server {
         info!("Starting IPC server for PhantomLink integration");
@@ -202,6 +397,23 @@ async fn main() -> Result<()> {
         audio::run_standalone(config).await?
     }
 
+    Ok(())
+}
+
+fn generate_completions(shell: &str) -> Result<()> {
+    use clap_complete::{generate, shells};
+    use std::io;
+
+    let mut app = Args::command();
+    let shell = match shell.to_lowercase().as_str() {
+        "bash" => shells::Bash,
+        "zsh" => shells::Zsh,
+        "fish" => shells::Fish,
+        "powershell" => shells::PowerShell,
+        _ => return Err(anyhow::anyhow!("Unsupported shell: {}", shell)),
+    };
+
+    generate(shell, &mut app, "ghostwave", &mut io::stdout());
     Ok(())
 }
 

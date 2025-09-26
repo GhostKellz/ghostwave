@@ -12,11 +12,18 @@ categories = ["multimedia::audio", "api-bindings"]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 tracing = "0.1"
 crossbeam = "0.8"
 dasp = { version = "0.11", features = ["signal", "interpolate", "ring_buffer"] }
 dirs = "5.0"
 libc = "0.2"
+notify = "6.0"
+tokio = { version = "1.0", features = ["full"] }
+jsonrpc-core = "18.0"
+jsonrpc-derive = "18.0"
+jsonrpc-ipc-server = "18.0"
+uuid = { version = "1.0", features = ["v4"] }
 
 # Optional features for different backends
 pipewire = { version = "0.8", optional = true }
@@ -38,6 +45,9 @@ cpal-backend = ["cpal"]
 
 # GPU acceleration
 nvidia-rtx = ["cudarc"]
+cuda-tensorrt = ["cudarc"]
+vulkan-compute = []
+opencl = []
 
 # All features
-full = ["pipewire-backend", "alsa-backend", "jack-backend", "cpal-backend", "nvidia-rtx"]
+full = ["pipewire-backend", "alsa-backend", "jack-backend", "cpal-backend", "nvidia-rtx", "cuda-tensorrt", "vulkan-compute"]

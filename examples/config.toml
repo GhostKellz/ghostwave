@@ -1,0 +1,119 @@
+# GhostWave Configuration File
+# This is a comprehensive example showing all available configuration options
+
+[app]
+version = "1.0.0"
+active_profile = "balanced"
+auto_save = true
+hot_reload = true
+
+[audio]
+# Audio system configuration
+sample_rate = 48000        # Hz - standard sample rates: 44100, 48000, 96000, 192000
+buffer_size = 128          # frames - power of 2, typically 64-512
+channels = 2               # 1=mono, 2=stereo
+input_device = "default"   # device name or "default"
+output_device = "default"  # device name or "default"
+backend = "auto"           # "auto", "pipewire", "alsa", "jack", "cpal"
+auto_device_selection = true
+
+[audio.hotplug]
+enabled = true
+debounce_ms = 1000        # milliseconds to wait before processing device changes
+auto_switch = false       # automatically switch to new devices
+device_priority = ["Scarlett Solo", "USB Audio", "Built-in Audio"]
+
+[processing]
+# DSP processing pipeline configuration
+enabled = true
+highpass_frequency = 80.0  # Hz - removes low-frequency noise and rumble
+
+[processing.vad]
+# Voice Activity Detection
+enabled = true
+sensitivity = 0.5          # 0.0 = very sensitive, 1.0 = less sensitive
+hangover_time = 0.2        # seconds to keep processing after voice stops
+energy_threshold = -40.0   # dB - energy threshold for voice detection
+
+[processing.gate]
+# Noise gate/expander
+enabled = true
+threshold = -45.0          # dB - gate threshold
+ratio = 3.0               # expansion ratio (1.0 = no expansion)
+attack_time = 0.001       # seconds - how quickly gate opens
+release_time = 0.1        # seconds - how quickly gate closes
+
+[processing.limiter]
+# Soft limiter to prevent clipping
+enabled = true
+threshold = 0.95          # 0.0 to 1.0 - limiter threshold
+knee_width = 0.1          # soft knee width
+makeup_gain = 0.0         # dB - gain compensation
+lookahead_ms = 5.0        # milliseconds of lookahead
+
+[processing.voice_enhancement]
+# Voice clarity enhancement (experimental)
+enabled = false
+strength = 0.5            # 0.0 to 1.0 - enhancement strength
+frequency_range = [200.0, 4000.0]  # Hz - frequency range to enhance
+clarity_boost = 2.0       # dB - clarity boost amount
+
+[noise_suppression]
+# Main noise reduction settings
+enabled = true
+strength = 0.7            # 0.0 to 1.0 - noise reduction strength
+over_subtraction = 2.0    # spectral subtraction over-subtraction factor
+adaptive_threshold = true # automatically adjust based on background noise
+noise_floor_db = -60.0    # dB - minimum noise floor
+
+[ipc]
+# Inter-Process Communication server for external control
+enabled = false
+socket_path = "/tmp/ghostwave.sock"
+authentication = false
+api_version = "1.0"
+timeout_seconds = 30
+max_connections = 10
+
+[logging]
+# Logging configuration
+level = "info"            # "error", "warn", "info", "debug", "trace"
+file_enabled = false      # enable logging to file
+file_path = "/tmp/ghostwave.log"
+max_file_size_mb = 10     # maximum log file size
+rotation_count = 5        # number of log files to keep
+json_format = false       # use structured JSON logging
+performance_metrics = false # log performance metrics
+
+[integrations.phantomlink]
+# PhantomLink professional mixing application integration
+enabled = false
+mode = "ipc"              # "ipc", "embedded", "jack"
+control_socket = "/tmp/phantomlink.sock"
+buffer_size = 4096
+
+[integrations.nvcontrol]
+# NVControl NVIDIA GPU management integration
+enabled = false
+gpu_device = 0            # GPU device ID (null for auto)
+rtx_voice = false         # enable RTX Voice acceleration
+rtx_quality = "medium"    # "low", "medium", "high", "maximum"
+memory_limit_mb = 1024    # GPU memory limit in MB
+power_mode = "balanced"   # "balanced", "performance", "efficiency"
+
+[integrations.plugins.example_plugin]
+# Example plugin configuration
+enabled = false
+parameters = { gain = 1.0, frequency = 1000.0, enabled = true }
+
+[performance]
+# Performance optimization settings
+realtime_priority = true  # attempt to set real-time priority
+cpu_affinity = [0, 1]     # CPU cores to bind to (null for no binding)
+memory_pool_size = 16     # number of pre-allocated buffers
+numa_aware = false        # NUMA-aware memory allocation
+target_latency_ms = 15.0  # target end-to-end latency
+monitoring = true         # enable performance monitoring
+
+# Profile-specific configurations can override these defaults
+# See profiles/ directory for profile-specific settings
