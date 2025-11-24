@@ -2,6 +2,8 @@
 
 This guide covers GhostWave's NVIDIA RTX GPU acceleration for AI-powered noise suppression. RTX acceleration provides superior denoising quality with minimal CPU impact.
 
+**⭐ NEW: RTX 50 Series (Blackwell) Support** - See [RTX 5090 Optimizations](RTX_5090_OPTIMIZATIONS.md) for Blackwell-specific features including FP4 Tensor Core acceleration.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -86,11 +88,18 @@ GhostWave leverages NVIDIA's RTX tensor cores for real-time AI noise suppression
 - RTX 3080, 3080 Ti
 - RTX 3090, 3090 Ti
 
-**RTX 40 Series (Optimal):**
+**RTX 40 Series (High-End):**
 - RTX 4060, 4060 Ti
 - RTX 4070, 4070 Ti, 4070 Super
 - RTX 4080, 4080 Super
 - RTX 4090
+
+**RTX 50 Series (Elite) - NEW:**
+- RTX 5060, 5060 Ti
+- RTX 5070, 5070 Ti
+- RTX 5080
+- **RTX 5090 (Best Performance)**
+- **ASUS ROG Astral RTX 5090 (Recommended)**
 
 ### Compute Capability Requirements
 
@@ -101,6 +110,7 @@ nvidia-smi --query-gpu=compute_cap --format=csv
 # GhostWave requirements:
 # Minimum: Compute 7.5 (RTX 2060+)
 # Recommended: Compute 8.6 (RTX 3060+)
+# Elite: Compute 10.0 (RTX 5090) - Blackwell with FP4 Tensor Cores
 # Optimal: Compute 8.9 (RTX 4060+)
 ```
 
@@ -124,15 +134,18 @@ nvidia-smi --query-gpu=compute_cap --format=csv
 
 **Arch Linux:**
 ```bash
-# Install open kernel modules
+# Install open kernel modules (580+ for RTX 50 series)
 sudo pacman -S nvidia-open nvidia-utils
 
-# Verify installation
+# Verify installation and driver version
 modinfo nvidia | grep -i version
-nvidia-smi
+nvidia-smi  # Should show 580.105.08+ for RTX 5090
 
 # Enable persistence mode
 sudo nvidia-persistenced --persistence-mode
+
+# For RTX 5090: Verify compute capability 10.0
+nvidia-smi --query-gpu=compute_cap --format=csv
 ```
 
 **Ubuntu 22.04+:**

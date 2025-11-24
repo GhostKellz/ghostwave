@@ -3,15 +3,18 @@
 //! Provides native PipeWire integration with named node 'GhostWave Clean',
 //! proper node properties, and professional audio routing capabilities.
 
-use anyhow::{Result, Context};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
-use tracing::{info, warn, debug, error};
+use tracing::{info, warn};
 
 #[cfg(feature = "pipewire-backend")]
 use pipewire as pw;
+
+#[cfg(feature = "pipewire-backend")]
+use libspa::utils::direction::Direction;
 
 /// PipeWire node configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,7 +202,7 @@ impl GhostWaveNode {
             let port_props = self.create_port_properties(channel_name, i)?;
 
             let port = node.add_port(
-                pw::port::Direction::Output,
+                Direction::Output,
                 &port_name,
                 &port_props,
             )?;

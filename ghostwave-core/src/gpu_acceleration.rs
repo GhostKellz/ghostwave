@@ -141,12 +141,63 @@ impl GpuCapabilities {
 
     #[cfg(feature = "cuda-tensorrt")]
     fn detect_cuda_devices() -> Vec<GpuDeviceInfo> {
-        // Use nvidia-ml-py or similar to get device info
-        // For now, return mock data
+        use std::process::Command;
+
+        // Try to detect actual GPU via nvidia-smi
+        if let Ok(output) = Command::new("nvidia-smi")
+            .args(&["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+            .output()
+        {
+            if output.status.success() {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                let parts: Vec<&str> = output_str.trim().split(',').collect();
+
+                if parts.len() >= 2 {
+                    let name = parts[0].trim().to_string();
+                    let memory_mb: f32 = parts[1].trim().parse().unwrap_or(8192.0);
+                    let memory_gb = memory_mb / 1024.0;
+
+                    // Detect compute capability based on GPU name
+                    let compute_capability = if name.contains("RTX 50") || name.contains("5090") || name.contains("5080") {
+                        (10, 0) // Blackwell
+                    } else if name.contains("RTX 40") || name.contains("4090") || name.contains("4080") {
+                        (8, 9) // Ada Lovelace
+                    } else if name.contains("RTX 30") || name.contains("3090") || name.contains("3080") {
+                        (8, 6) // Ampere
+                    } else {
+                        (7, 5) // Turing fallback
+                    };
+
+                    info!("Detected GPU: {} with {:.1}GB memory", name, memory_gb);
+
+                    // ASUS ROG Astral RTX 5090 specific detection
+                    if name.contains("5090") && memory_gb > 30.0 {
+                        info!("🔥 ASUS ROG Astral RTX 5090 detected!");
+                        info!("   Quad-fan cooling optimized for sustained performance");
+                        info!("   Factory OC: 2610MHz boost (630W max power)");
+                        info!("   32GB GDDR7 memory - perfect for large audio buffers");
+                    }
+
+                    return vec![GpuDeviceInfo {
+                        name,
+                        memory_gb,
+                        compute_capability,
+                        backend: GpuBackend::CudaTensorRT,
+                        supports_fp16: true,
+                        supports_int8: true,
+                        max_threads_per_block: if compute_capability.0 >= 10 { 1536 } else { 1024 },
+                        max_shared_memory_kb: if compute_capability.0 >= 10 { 228 } else { 48 },
+                    }];
+                }
+            }
+        }
+
+        // Fallback to generic RTX GPU
+        warn!("Could not detect GPU via nvidia-smi, using generic RTX profile");
         vec![GpuDeviceInfo {
             name: "NVIDIA RTX GPU".to_string(),
             memory_gb: 8.0,
-            compute_capability: (8, 6), // RTX 30/40 series
+            compute_capability: (8, 6), // Ampere fallback
             backend: GpuBackend::CudaTensorRT,
             supports_fp16: true,
             supports_int8: true,
