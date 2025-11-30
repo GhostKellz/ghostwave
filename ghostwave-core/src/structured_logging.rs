@@ -233,18 +233,18 @@ impl StructuredLogger {
     pub fn log_with_fields(&self, level: LogLevel, component: &str, message: &str,
                           fields: std::collections::HashMap<String, serde_json::Value>) {
         if level >= self.min_level {
+            // Log to tracing with fields first (before moving entry)
+            match level {
+                LogLevel::Error => error!("{}: {} (fields: {:?})", component, message, fields),
+                LogLevel::Warn => warn!("{}: {} (fields: {:?})", component, message, fields),
+                LogLevel::Info => info!("{}: {} (fields: {:?})", component, message, fields),
+                LogLevel::Debug => debug!("{}: {} (fields: {:?})", component, message, fields),
+                LogLevel::Trace => debug!("{}: {} (fields: {:?})", component, message, fields),
+            }
+
             let mut entry = LogEntry::new(level, component, message);
             entry.fields = fields;
             self.buffer.lock().unwrap().push(entry);
-
-            // Log to tracing with fields
-            match level {
-                LogLevel::Error => error!("{}: {} (fields: {:?})", component, message, entry.fields),
-                LogLevel::Warn => warn!("{}: {} (fields: {:?})", component, message, entry.fields),
-                LogLevel::Info => info!("{}: {} (fields: {:?})", component, message, entry.fields),
-                LogLevel::Debug => debug!("{}: {} (fields: {:?})", component, message, entry.fields),
-                LogLevel::Trace => debug!("{}: {} (fields: {:?})", component, message, entry.fields),
-            }
         }
     }
 
@@ -322,23 +322,17 @@ macro_rules! log_debug {
     };
 }
 
-/// Global logger instance
-static mut GLOBAL_LOGGER: Option<StructuredLogger> = None;
-static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+/// Global logger instance using OnceLock for Rust 2024 safety
+static GLOBAL_LOGGER: std::sync::OnceLock<StructuredLogger> = std::sync::OnceLock::new();
 
 /// Initialize the global structured logger
 pub fn init_global_logger(min_level: LogLevel) -> &'static StructuredLogger {
-    unsafe {
-        LOGGER_INIT.call_once(|| {
-            GLOBAL_LOGGER = Some(StructuredLogger::new(min_level));
-        });
-        GLOBAL_LOGGER.as_ref().unwrap()
-    }
+    GLOBAL_LOGGER.get_or_init(|| StructuredLogger::new(min_level))
 }
 
 /// Get the global logger instance
 pub fn global_logger() -> Option<&'static StructuredLogger> {
-    unsafe { GLOBAL_LOGGER.as_ref() }
+    GLOBAL_LOGGER.get()
 }
 
 /// Audio processing specific logging components

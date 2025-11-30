@@ -1,13 +1,19 @@
 //! # GhostWave Core
 //!
-//! Core audio processing library for GhostWave - Linux RTX Voice alternative.
+//! Core audio processing library for GhostWave - Linux RTX Voice / NVIDIA Broadcast alternative.
 //!
 //! This library provides:
-//! - Real-time noise suppression and audio processing
-//! - Multiple audio backend support (PipeWire, ALSA, JACK, CPAL)
-//! - NVIDIA RTX GPU acceleration for noise reduction
-//! - Low-latency audio pipeline optimizations
-//! - Lock-free data structures for zero-copy processing
+//! - **AI-Powered Noise Suppression**: RNNoise and Transformer models with RTX acceleration
+//! - **Echo Cancellation**: Remove room echo and speaker feedback
+//! - **Voice Isolation**: Isolate primary speaker, remove background voices
+//! - **Multiple Audio Backends**: PipeWire, ALSA, JACK, CPAL
+//! - **RTX GPU Acceleration**: TensorRT FP16/FP4 (Blackwell) inference
+//! - **Low-Latency Pipeline**: Lock-free, zero-copy audio processing
+//!
+//! ## RTX 40/50 Series Optimizations
+//! - 4th/5th gen Tensor Core acceleration
+//! - FP4 precision on RTX 50 series (Blackwell) for 2-3x speedup
+//! - Requires nvidia-open 580+ drivers for RTX 5090
 //!
 //! ## Example Usage
 //!
@@ -44,6 +50,10 @@ pub mod pipewire_integration;
 pub mod ipc_server;
 pub mod simd_acceleration;
 pub mod gpu_acceleration;
+pub mod rtx_denoising;
+
+// AI-powered denoising (NVIDIA Broadcast / Krisp parity)
+pub mod ai_denoise;
 
 #[cfg(feature = "nvidia-rtx")]
 pub mod rtx_acceleration;
@@ -242,7 +252,7 @@ impl AudioProcessor for GhostWaveProcessor {
 
         // Update config with new parameters
         self.config.audio.sample_rate = sample_rate;
-        self.config.audio.channels = channels as u16;
+        self.config.audio.channels = channels as u8;
         self.config.audio.buffer_size = max_buffer_size as u32;
 
         // Initialize DSP pipeline
@@ -319,8 +329,21 @@ impl AudioProcessor for GhostWaveProcessor {
             pipeline.set_profile(profile);
         }
 
-        // Apply profile-specific parameters
-        self.profile_params.apply_to_processor(self, profile)?;
+        // Apply profile-specific parameters directly (avoiding double borrow)
+        if let Some(params) = self.profile_params.get_profile_params(profile).cloned() {
+            for (name, value) in params {
+                // Apply to DSP pipeline if available
+                if let Some(ref mut pipeline) = self.dsp_pipeline {
+                    let _ = pipeline.set_param(&name, value.clone());
+                }
+                // Apply to config for specific params
+                if name == "noise_reduction_strength" {
+                    if let ParamValue::Float(strength) = value {
+                        self.config.noise_suppression.strength = strength;
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -333,8 +356,8 @@ impl AudioProcessor for GhostWaveProcessor {
         // First try to set parameter in DSP pipeline if available
         if let Some(ref mut pipeline) = self.dsp_pipeline {
             if pipeline.set_param(name, value.clone()).is_ok() {
-                self.profile_params.set_profile_param(self.profile, name.to_string(), value);
                 debug!("Set parameter {} = {:?} in DSP pipeline", name, value);
+                self.profile_params.set_profile_param(self.profile, name.to_string(), value);
                 return Ok(());
             }
         }

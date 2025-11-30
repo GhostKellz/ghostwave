@@ -173,14 +173,22 @@ impl DeviceManager {
 
     /// Score a device based on selection criteria
     fn score_device(&self, score: &mut DeviceScore) {
-        let device = &score.device;
+        // Clone relevant device data to avoid borrow conflicts
+        let device_type = score.device.device_type.clone();
+        let is_xlr = score.device.is_xlr_interface;
+        let device_name = score.device.name.clone();
+        let device_vendor = score.device.vendor.clone();
+        let device_model = score.device.model.clone();
+        let supported_sample_rates = score.device.supported_sample_rates.clone();
+        let supported_buffer_sizes = score.device.supported_buffer_sizes.clone();
+        let channels = score.device.channels;
 
         // Base score for functionality
         score.add_score(10, "Base functionality");
 
         // Type preference scoring
         for (index, preferred_type) in self.config.preferred_types.iter().enumerate() {
-            if device.device_type == *preferred_type {
+            if device_type == *preferred_type {
                 let type_score = 100 - (index * 10) as u32;
                 score.add_score(type_score, &format!("Preferred device type: {:?}", preferred_type));
                 break;
@@ -188,18 +196,18 @@ impl DeviceManager {
         }
 
         // XLR interface bonus
-        if device.is_xlr_interface && self.config.prefer_xlr_interfaces {
+        if is_xlr && self.config.prefer_xlr_interfaces {
             score.add_score(50, "XLR professional interface");
         }
 
         // USB audio preference
-        if device.name.to_lowercase().contains("usb") && self.config.prefer_usb_audio {
+        if device_name.to_lowercase().contains("usb") && self.config.prefer_usb_audio {
             score.add_score(30, "USB audio device");
         }
 
         // Vendor preference
         for preferred_vendor in &self.config.preferred_vendors {
-            if device.vendor.to_lowercase().contains(&preferred_vendor.to_lowercase()) {
+            if device_vendor.to_lowercase().contains(&preferred_vendor.to_lowercase()) {
                 score.add_score(40, &format!("Preferred vendor: {}", preferred_vendor));
                 break;
             }
@@ -207,15 +215,15 @@ impl DeviceManager {
 
         // Name preference
         for preferred_name in &self.config.preferred_names {
-            if device.name.to_lowercase().contains(&preferred_name.to_lowercase()) ||
-               device.model.to_lowercase().contains(&preferred_name.to_lowercase()) {
+            if device_name.to_lowercase().contains(&preferred_name.to_lowercase()) ||
+               device_model.to_lowercase().contains(&preferred_name.to_lowercase()) {
                 score.add_score(30, &format!("Preferred name pattern: {}", preferred_name));
                 break;
             }
         }
 
         // Sample rate capability
-        if let Some(max_sr) = device.supported_sample_rates.iter().max() {
+        if let Some(max_sr) = supported_sample_rates.iter().max() {
             if *max_sr >= 96000 {
                 score.add_score(25, "High sample rate support (96kHz+)");
             } else if *max_sr >= 48000 {
@@ -229,7 +237,7 @@ impl DeviceManager {
         }
 
         // Channel count
-        match device.channels {
+        match channels {
             1 => score.add_score(10, "Mono input"),
             2 => score.add_score(20, "Stereo input"),
             n if n > 2 => score.add_score(15, &format!("{} channel input", n)),
@@ -237,7 +245,7 @@ impl DeviceManager {
         }
 
         // Latency estimate based on buffer size
-        if let Some(min_buffer) = device.supported_buffer_sizes.iter().min() {
+        if let Some(min_buffer) = supported_buffer_sizes.iter().min() {
             let estimated_latency = (*min_buffer as f32 / 48000.0) * 1000.0; // Rough estimate at 48kHz
             if estimated_latency <= self.config.max_latency_ms {
                 let latency_score = ((self.config.max_latency_ms - estimated_latency) * 2.0) as u32;
@@ -246,7 +254,7 @@ impl DeviceManager {
         }
 
         // Known good devices
-        let device_key = format!("{} {}", device.vendor, device.model).to_lowercase();
+        let device_key = format!("{} {}", device_vendor, device_model).to_lowercase();
         if device_key.contains("focusrite") && device_key.contains("scarlett") {
             score.add_score(60, "Focusrite Scarlett (known excellent)");
         } else if device_key.contains("presonus") {
@@ -428,24 +436,27 @@ impl DeviceManager {
 
     /// Static scoring method for use in async context
     fn score_device_static(config: &DeviceSelectionConfig, score: &mut DeviceScore) {
-        let device = &score.device;
+        // Clone device data to avoid borrow conflicts
+        let device_type = score.device.device_type.clone();
+        let is_xlr = score.device.is_xlr_interface;
+        let device_vendor = score.device.vendor.clone();
 
         score.add_score(10, "Base functionality");
 
         for (index, preferred_type) in config.preferred_types.iter().enumerate() {
-            if device.device_type == *preferred_type {
+            if device_type == *preferred_type {
                 let type_score = 100 - (index * 10) as u32;
                 score.add_score(type_score, &format!("Preferred device type: {:?}", preferred_type));
                 break;
             }
         }
 
-        if device.is_xlr_interface && config.prefer_xlr_interfaces {
+        if is_xlr && config.prefer_xlr_interfaces {
             score.add_score(50, "XLR professional interface");
         }
 
         for preferred_vendor in &config.preferred_vendors {
-            if device.vendor.to_lowercase().contains(&preferred_vendor.to_lowercase()) {
+            if device_vendor.to_lowercase().contains(&preferred_vendor.to_lowercase()) {
                 score.add_score(40, &format!("Preferred vendor: {}", preferred_vendor));
                 break;
             }
@@ -533,11 +544,13 @@ mod tests {
 
         let test_device = AudioDevice {
             name: "Focusrite Scarlett Solo 4th Gen".to_string(),
+            id: "scarlett-solo-4".to_string(),
             vendor: "Focusrite".to_string(),
             model: "Scarlett Solo".to_string(),
             device_type: AudioDeviceType::XlrInterface,
             is_xlr_interface: true,
             channels: 2,
+            sample_rates: vec![44100, 48000, 96000, 192000],
             supported_sample_rates: vec![44100, 48000, 96000, 192000],
             supported_buffer_sizes: vec![32, 64, 128, 256, 512],
             recommended_profile: "studio".to_string(),

@@ -215,7 +215,7 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
             }
 
             "auth.validate" => {
-                let token = params
+                let token = params.as_ref()
                     .and_then(|p| p.get("token"))
                     .and_then(|t| t.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing token parameter"))?;
@@ -234,7 +234,7 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
             }
 
             "set_profile" => {
-                let profile_str = params
+                let profile_str = params.as_ref()
                     .and_then(|p| p.get("profile"))
                     .and_then(|p| p.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing profile parameter"))?;
@@ -267,7 +267,7 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
 
             // Parameter methods
             "get_param" => {
-                let param_name = params
+                let param_name = params.as_ref()
                     .and_then(|p| p.get("name"))
                     .and_then(|n| n.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing parameter name"))?;
@@ -284,12 +284,13 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
             }
 
             "set_param" => {
-                let param_name = params
+                let params_ref = params.as_ref();
+                let param_name = params_ref
                     .and_then(|p| p.get("name"))
                     .and_then(|n| n.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing parameter name"))?;
 
-                let param_value = params
+                let param_value = params_ref
                     .and_then(|p| p.get("value"))
                     .ok_or_else(|| anyhow::anyhow!("Missing parameter value"))?;
 

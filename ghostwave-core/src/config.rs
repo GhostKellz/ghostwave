@@ -32,6 +32,12 @@ pub struct NoiseSuppressionConfig {
     pub release_time: f32,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::balanced()
+    }
+}
+
 impl Config {
     pub fn load(profile_name: &str) -> Result<Self> {
         let mut config = match profile_name {

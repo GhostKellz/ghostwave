@@ -412,6 +412,7 @@ impl ConfigManager {
     /// Enable hot reloading
     pub fn enable_hot_reload(&mut self) -> Result<mpsc::Receiver<()>> {
         let (tx, rx) = mpsc::channel();
+        let tx_for_watcher = tx.clone();
 
         let config_path = self.config_path.clone();
         let config_arc = Arc::clone(&self.config);
@@ -427,7 +428,7 @@ impl ConfigManager {
                                 if let Ok(mut config) = config_arc.write() {
                                     *config = new_config;
                                     info!("✅ Configuration reloaded successfully");
-                                    let _ = tx.send(());
+                                    let _ = tx_for_watcher.send(());
                                 }
                             }
                             Err(e) => {

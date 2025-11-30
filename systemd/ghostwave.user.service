@@ -1,0 +1,26 @@
+[Unit]
+Description=GhostWave AI Noise Suppression
+Documentation=https://github.com/ghostkellz/ghostwave
+After=pipewire.service pipewire-pulse.service wireplumber.service
+BindsTo=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ghostwave --pipewire-module --profile balanced
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+
+# Real-time audio priority
+Nice=-15
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=75
+
+# Memory
+LimitMEMLOCK=infinity
+
+# Environment for PipeWire
+Environment="XDG_RUNTIME_DIR=%t"
+
+[Install]
+WantedBy=pipewire.service

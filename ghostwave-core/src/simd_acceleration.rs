@@ -44,7 +44,7 @@ impl SimdCapabilities {
         if self.has_avx512f {
             InstructionSet::AVX512
         } else if self.has_avx2 && self.has_fma {
-            InstructionSet::AVX2_FMA
+            InstructionSet::Avx2Fma
         } else if self.has_avx2 {
             InstructionSet::AVX2
         } else if self.has_avx {
@@ -62,7 +62,7 @@ impl SimdCapabilities {
     pub fn optimal_vector_width(&self) -> usize {
         match self.best_instruction_set() {
             InstructionSet::AVX512 => 16, // 512 bits / 32 bits per f32
-            InstructionSet::AVX2_FMA | InstructionSet::AVX2 | InstructionSet::AVX => 8, // 256 bits / 32 bits
+            InstructionSet::Avx2Fma | InstructionSet::AVX2 | InstructionSet::AVX => 8, // 256 bits / 32 bits
             InstructionSet::SSE42 | InstructionSet::SSE2 => 4, // 128 bits / 32 bits
             InstructionSet::Scalar => 1,
         }
@@ -82,13 +82,15 @@ impl SimdCapabilities {
 
 /// Supported instruction sets in order of preference
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum InstructionSet {
+    #[default]
     Scalar,
     SSE2,
     SSE42,
     AVX,
     AVX2,
-    AVX2_FMA,
+    Avx2Fma,
     AVX512,
 }
 
@@ -100,7 +102,7 @@ impl std::fmt::Display for InstructionSet {
             InstructionSet::SSE42 => write!(f, "SSE4.2"),
             InstructionSet::AVX => write!(f, "AVX"),
             InstructionSet::AVX2 => write!(f, "AVX2"),
-            InstructionSet::AVX2_FMA => write!(f, "AVX2+FMA"),
+            InstructionSet::Avx2Fma => write!(f, "AVX2+FMA"),
             InstructionSet::AVX512 => write!(f, "AVX-512"),
         }
     }
@@ -135,14 +137,17 @@ impl SimdProcessor {
         }
 
         match self.instruction_set {
-            InstructionSet::AVX2_FMA | InstructionSet::AVX2 => {
-                self.process_avx2(input, output, operation)
+            InstructionSet::Avx2Fma | InstructionSet::AVX2 => {
+                // SAFETY: process_avx2 requires AVX2 target feature which we've detected
+                unsafe { self.process_avx2(input, output, operation) }
             }
             InstructionSet::AVX => {
-                self.process_avx(input, output, operation)
+                // SAFETY: process_avx requires AVX target feature which we've detected
+                unsafe { self.process_avx(input, output, operation) }
             }
             InstructionSet::SSE42 | InstructionSet::SSE2 => {
-                self.process_sse2(input, output, operation)
+                // SAFETY: process_sse2 requires SSE2 target feature which we've detected
+                unsafe { self.process_sse2(input, output, operation) }
             }
             InstructionSet::Scalar | InstructionSet::AVX512 => {
                 // AVX-512 fallback to scalar for now (complex to implement)
@@ -160,67 +165,78 @@ impl SimdProcessor {
         match operation {
             BufferOperation::Copy => {
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), a);
+                    unsafe {
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), a);
+                    }
                 }
             }
             BufferOperation::Gain(gain) => {
-                let gain_vec = _mm256_set1_ps(gain);
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    let result = _mm256_mul_ps(a, gain_vec);
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let gain_vec = _mm256_set1_ps(gain);
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        let result = _mm256_mul_ps(a, gain_vec);
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             BufferOperation::Add => {
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    let b = _mm256_loadu_ps(output.as_ptr().add(i));
-                    let result = _mm256_add_ps(a, b);
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        let b = _mm256_loadu_ps(output.as_ptr().add(i));
+                        let result = _mm256_add_ps(a, b);
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             BufferOperation::Multiply => {
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    let b = _mm256_loadu_ps(output.as_ptr().add(i));
-                    let result = _mm256_mul_ps(a, b);
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        let b = _mm256_loadu_ps(output.as_ptr().add(i));
+                        let result = _mm256_mul_ps(a, b);
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             BufferOperation::SoftClip(threshold) => {
-                let threshold_vec = _mm256_set1_ps(threshold);
-                let neg_threshold_vec = _mm256_set1_ps(-threshold);
-
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    // Soft clipping using tanh approximation
-                    let clamped = _mm256_max_ps(_mm256_min_ps(a, threshold_vec), neg_threshold_vec);
-                    let result = _mm256_div_ps(clamped, _mm256_set1_ps(1.0 + threshold));
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let threshold_vec = _mm256_set1_ps(threshold);
+                        let neg_threshold_vec = _mm256_set1_ps(-threshold);
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        // Soft clipping using tanh approximation
+                        let clamped = _mm256_max_ps(_mm256_min_ps(a, threshold_vec), neg_threshold_vec);
+                        let result = _mm256_div_ps(clamped, _mm256_set1_ps(1.0 + threshold));
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             BufferOperation::HighPass { cutoff_norm, state } => {
-                // Simple one-pole high-pass filter
-                let alpha = _mm256_set1_ps(cutoff_norm);
-                let one_minus_alpha = _mm256_set1_ps(1.0 - cutoff_norm);
-                let mut prev = _mm256_set1_ps(*state);
+                unsafe {
+                    // Simple one-pole high-pass filter
+                    let alpha = _mm256_set1_ps(cutoff_norm);
+                    let one_minus_alpha = _mm256_set1_ps(1.0 - cutoff_norm);
+                    let mut prev = _mm256_set1_ps(*state);
 
-                for i in (0..vector_len).step_by(8) {
-                    let input_vec = _mm256_loadu_ps(input.as_ptr().add(i));
-                    let filtered = _mm256_add_ps(
-                        _mm256_mul_ps(alpha, input_vec),
-                        _mm256_mul_ps(one_minus_alpha, prev)
-                    );
-                    let output_vec = _mm256_sub_ps(input_vec, filtered);
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), output_vec);
-                    prev = filtered;
+                    for i in (0..vector_len).step_by(8) {
+                        let input_vec = _mm256_loadu_ps(input.as_ptr().add(i));
+                        let filtered = _mm256_add_ps(
+                            _mm256_mul_ps(alpha, input_vec),
+                            _mm256_mul_ps(one_minus_alpha, prev)
+                        );
+                        let output_vec = _mm256_sub_ps(input_vec, filtered);
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), output_vec);
+                        prev = filtered;
+                    }
+
+                    // Update state with last value
+                    let mut temp = [0.0f32; 8];
+                    _mm256_storeu_ps(temp.as_mut_ptr(), prev);
+                    *state = temp[7];
                 }
-
-                // Update state with last value
-                let mut temp = [0.0f32; 8];
-                _mm256_storeu_ps(temp.as_mut_ptr(), prev);
-                *state = temp[7];
             }
         }
 
@@ -241,16 +257,20 @@ impl SimdProcessor {
         match operation {
             BufferOperation::Copy => {
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), a);
+                    unsafe {
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), a);
+                    }
                 }
             }
             BufferOperation::Gain(gain) => {
-                let gain_vec = _mm256_set1_ps(gain);
                 for i in (0..vector_len).step_by(8) {
-                    let a = _mm256_loadu_ps(input.as_ptr().add(i));
-                    let result = _mm256_mul_ps(a, gain_vec);
-                    _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let gain_vec = _mm256_set1_ps(gain);
+                        let a = _mm256_loadu_ps(input.as_ptr().add(i));
+                        let result = _mm256_mul_ps(a, gain_vec);
+                        _mm256_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             _ => {
@@ -276,24 +296,30 @@ impl SimdProcessor {
         match operation {
             BufferOperation::Copy => {
                 for i in (0..vector_len).step_by(4) {
-                    let a = _mm_loadu_ps(input.as_ptr().add(i));
-                    _mm_storeu_ps(output.as_mut_ptr().add(i), a);
+                    unsafe {
+                        let a = _mm_loadu_ps(input.as_ptr().add(i));
+                        _mm_storeu_ps(output.as_mut_ptr().add(i), a);
+                    }
                 }
             }
             BufferOperation::Gain(gain) => {
-                let gain_vec = _mm_set1_ps(gain);
                 for i in (0..vector_len).step_by(4) {
-                    let a = _mm_loadu_ps(input.as_ptr().add(i));
-                    let result = _mm_mul_ps(a, gain_vec);
-                    _mm_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let gain_vec = _mm_set1_ps(gain);
+                        let a = _mm_loadu_ps(input.as_ptr().add(i));
+                        let result = _mm_mul_ps(a, gain_vec);
+                        _mm_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             BufferOperation::Add => {
                 for i in (0..vector_len).step_by(4) {
-                    let a = _mm_loadu_ps(input.as_ptr().add(i));
-                    let b = _mm_loadu_ps(output.as_ptr().add(i));
-                    let result = _mm_add_ps(a, b);
-                    _mm_storeu_ps(output.as_mut_ptr().add(i), result);
+                    unsafe {
+                        let a = _mm_loadu_ps(input.as_ptr().add(i));
+                        let b = _mm_loadu_ps(output.as_ptr().add(i));
+                        let result = _mm_add_ps(a, b);
+                        _mm_storeu_ps(output.as_mut_ptr().add(i), result);
+                    }
                 }
             }
             _ => {
@@ -341,9 +367,12 @@ impl SimdProcessor {
                 };
             }
             BufferOperation::HighPass { cutoff_norm, state } => {
-                let filtered = cutoff_norm * input + (1.0 - cutoff_norm) * *state;
-                *output = input - filtered;
-                *state = filtered;
+                // SAFETY: state pointer is valid for the duration of the operation
+                unsafe {
+                    let filtered = cutoff_norm * input + (1.0 - cutoff_norm) * *state;
+                    *output = input - filtered;
+                    *state = filtered;
+                }
             }
         }
         Ok(())
@@ -356,8 +385,9 @@ impl SimdProcessor {
         }
 
         match self.instruction_set {
-            InstructionSet::AVX2_FMA | InstructionSet::AVX2 => {
-                self.convolve_avx2(input, impulse, output)
+            InstructionSet::Avx2Fma | InstructionSet::AVX2 => {
+                // SAFETY: convolve_avx2 requires AVX2+FMA target features which we've detected
+                unsafe { self.convolve_avx2(input, impulse, output) }
             }
             _ => {
                 self.convolve_scalar(input, impulse, output)
@@ -365,21 +395,23 @@ impl SimdProcessor {
         }
     }
 
-    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "avx2", enable = "fma")]
     unsafe fn convolve_avx2(&self, input: &[f32], impulse: &[f32], output: &mut [f32]) -> Result<()> {
         output.fill(0.0);
 
         for i in 0..input.len() {
-            let input_val = _mm256_set1_ps(input[i]);
             let impulse_len = impulse.len();
             let vector_len = impulse_len - (impulse_len % 8);
 
             // Vectorized multiply-accumulate
             for j in (0..vector_len).step_by(8) {
-                let impulse_vec = _mm256_loadu_ps(impulse.as_ptr().add(j));
-                let output_vec = _mm256_loadu_ps(output.as_ptr().add(i + j));
-                let result = _mm256_fmadd_ps(input_val, impulse_vec, output_vec);
-                _mm256_storeu_ps(output.as_mut_ptr().add(i + j), result);
+                unsafe {
+                    let input_val = _mm256_set1_ps(input[i]);
+                    let impulse_vec = _mm256_loadu_ps(impulse.as_ptr().add(j));
+                    let output_vec = _mm256_loadu_ps(output.as_ptr().add(i + j));
+                    let result = _mm256_fmadd_ps(input_val, impulse_vec, output_vec);
+                    _mm256_storeu_ps(output.as_mut_ptr().add(i + j), result);
+                }
             }
 
             // Handle remaining impulse samples
@@ -505,23 +537,17 @@ impl SimdBenchmarkResults {
     }
 }
 
-/// Global SIMD processor instance
-static mut GLOBAL_SIMD_PROCESSOR: Option<SimdProcessor> = None;
-static SIMD_INIT: std::sync::Once = std::sync::Once::new();
+/// Global SIMD processor instance using OnceLock for Rust 2024 safety
+static GLOBAL_SIMD_PROCESSOR: std::sync::OnceLock<SimdProcessor> = std::sync::OnceLock::new();
 
 /// Initialize global SIMD processor
 pub fn init_global_simd() -> &'static SimdProcessor {
-    unsafe {
-        SIMD_INIT.call_once(|| {
-            GLOBAL_SIMD_PROCESSOR = Some(SimdProcessor::new());
-        });
-        GLOBAL_SIMD_PROCESSOR.as_ref().unwrap()
-    }
+    GLOBAL_SIMD_PROCESSOR.get_or_init(SimdProcessor::new)
 }
 
 /// Get global SIMD processor
 pub fn global_simd() -> Option<&'static SimdProcessor> {
-    unsafe { GLOBAL_SIMD_PROCESSOR.as_ref() }
+    GLOBAL_SIMD_PROCESSOR.get()
 }
 
 #[cfg(test)]

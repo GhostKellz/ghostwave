@@ -10,28 +10,36 @@ struct AlsaCard {
     long_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AudioDevice {
     pub name: String,
     pub id: String,
     pub device_type: AudioDeviceType,
     pub channels: u8,
     pub sample_rates: Vec<u32>,
+    pub supported_sample_rates: Vec<u32>,
+    pub supported_buffer_sizes: Vec<usize>,
     pub vendor: String,
     pub model: String,
     pub is_xlr_interface: bool,
     pub recommended_profile: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AudioDeviceType {
     XlrInterface,
     UsbMicrophone,
+    UsbAudio,
+    Microphone,
+    Headset,
+    LineIn,
+    Internal,
     BuiltIn,
     Virtual,
     Unknown,
 }
 
+#[derive(Clone)]
 pub struct DeviceDetector {
     known_devices: HashMap<String, AudioDevice>,
 }
@@ -53,6 +61,8 @@ impl DeviceDetector {
             device_type: AudioDeviceType::XlrInterface,
             channels: 2,
             sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+            supported_sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+            supported_buffer_sizes: vec![64, 128, 256, 512, 1024],
             vendor: "Focusrite".to_string(),
             model: "Scarlett Solo 4th Gen".to_string(),
             is_xlr_interface: true,
@@ -66,6 +76,8 @@ impl DeviceDetector {
             device_type: AudioDeviceType::XlrInterface,
             channels: 2,
             sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+            supported_sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+            supported_buffer_sizes: vec![64, 128, 256, 512, 1024],
             vendor: "Focusrite".to_string(),
             model: "Scarlett 2i2 4th Gen".to_string(),
             is_xlr_interface: true,
@@ -79,6 +91,8 @@ impl DeviceDetector {
             device_type: AudioDeviceType::XlrInterface,
             channels: 2,
             sample_rates: vec![44100, 48000],
+            supported_sample_rates: vec![44100, 48000],
+            supported_buffer_sizes: vec![128, 256, 512, 1024],
             vendor: "Behringer".to_string(),
             model: "U-PHORIA UM2".to_string(),
             is_xlr_interface: true,
@@ -132,6 +146,8 @@ impl DeviceDetector {
                                 device_type: AudioDeviceType::Unknown,
                                 channels: 2, // Default assumption
                                 sample_rates: vec![44100, 48000],
+                                supported_sample_rates: vec![44100, 48000],
+                                supported_buffer_sizes: vec![128, 256, 512, 1024],
                                 vendor: "Unknown".to_string(),
                                 model: name,
                                 is_xlr_interface: false,
@@ -194,6 +210,8 @@ impl DeviceDetector {
                 device_type: AudioDeviceType::XlrInterface,
                 channels: 2,
                 sample_rates: vec![44100, 48000, 96000, 192000],
+                supported_sample_rates: vec![44100, 48000, 96000, 192000],
+                supported_buffer_sizes: vec![64, 128, 256, 512, 1024],
                 vendor: "Focusrite".to_string(),
                 model: alsa_card.long_name.clone(),
                 is_xlr_interface: true,
@@ -238,6 +256,8 @@ impl DeviceDetector {
                 device_type: AudioDeviceType::XlrInterface,
                 channels: 2,
                 sample_rates: vec![44100, 48000, 96000, 192000],
+                supported_sample_rates: vec![44100, 48000, 96000, 192000],
+                supported_buffer_sizes: vec![64, 128, 256, 512, 1024],
                 vendor: "Focusrite".to_string(),
                 model: device_name.to_string(),
                 is_xlr_interface: true,

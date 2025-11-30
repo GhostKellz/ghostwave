@@ -1,0 +1,91 @@
+# GhostWave Configuration
+# RTX Voice-style AI noise suppression for Linux
+#
+# Copy to ~/.config/ghostwave/config.toml and customize
+
+[profile]
+name = "balanced"
+description = "Balanced noise suppression for general use"
+
+[audio]
+# Sample rate in Hz (44100, 48000, 96000)
+sample_rate = 48000
+# Buffer size in frames (lower = less latency, higher CPU)
+# 128 = ~2.7ms, 256 = ~5.3ms, 512 = ~10.7ms
+buffer_size = 256
+# Number of channels (1 = mono, 2 = stereo)
+channels = 2
+
+[noise_suppression]
+# Enable noise suppression
+enabled = true
+# Suppression strength (0.0 - 1.0)
+# Higher = more aggressive, may affect voice quality
+strength = 0.7
+# Noise gate threshold in dB (-60 to 0)
+gate_threshold = -40.0
+# Release time in seconds (0.05 - 0.5)
+release_time = 0.15
+# Voice activity detection sensitivity (0.0 - 1.0)
+vad_sensitivity = 0.5
+
+[pipewire]
+# Node name (appears in PipeWire/PulseAudio)
+node_name = "GhostWave Clean"
+# Node description
+description = "GhostWave Noise Suppressed Audio"
+# Media class for routing
+media_class = "Audio/Source"
+# Auto-connect to default sink
+auto_connect = true
+
+[rtx]
+# Enable RTX tensor core acceleration (requires NVIDIA RTX GPU)
+enabled = false
+# Fallback to CPU if RTX unavailable
+fallback_cpu = true
+# Model quality (low, medium, high)
+model_quality = "medium"
+
+[ipc]
+# Enable JSON-RPC IPC server
+enabled = true
+# Socket path (relative to XDG_RUNTIME_DIR)
+socket_path = "ghostwave.sock"
+
+[logging]
+# Log level (trace, debug, info, warn, error)
+level = "info"
+# Log to file
+file_enabled = false
+file_path = "~/.local/share/ghostwave/ghostwave.log"
+
+# ============================================================================
+# Preset Profiles
+# ============================================================================
+
+# Use with: ghostwave --profile streaming
+[profiles.streaming]
+name = "streaming"
+description = "Optimized for live streaming (OBS, Discord)"
+audio.buffer_size = 256
+noise_suppression.strength = 0.8
+noise_suppression.gate_threshold = -35.0
+
+# Use with: ghostwave --profile studio
+[profiles.studio]
+name = "studio"
+description = "High quality for recording/podcasting"
+audio.sample_rate = 96000
+audio.buffer_size = 512
+noise_suppression.strength = 0.6
+noise_suppression.release_time = 0.2
+
+# Use with: ghostwave --profile gaming
+[profiles.gaming]
+name = "gaming"
+description = "Low latency for voice chat"
+audio.buffer_size = 128
+noise_suppression.strength = 0.75
+noise_suppression.gate_threshold = -45.0
+noise_suppression.release_time = 0.1

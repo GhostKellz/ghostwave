@@ -169,7 +169,6 @@ async fn main() -> Result<()> {
     if args.version {
         println!("GhostWave {}", env!("CARGO_PKG_VERSION"));
         println!("Linux RTX Voice Alternative");
-        println!("Build: {} ({})", env!("VERGEN_BUILD_DATE"), env!("VERGEN_GIT_SHA"));
         return Ok(());
     }
 
@@ -401,19 +400,20 @@ async fn main() -> Result<()> {
 }
 
 fn generate_completions(shell: &str) -> Result<()> {
-    use clap_complete::{generate, shells};
+    use clap::CommandFactory;
+    use clap_complete::{generate, Shell};
     use std::io;
 
     let mut app = Args::command();
-    let shell = match shell.to_lowercase().as_str() {
-        "bash" => shells::Bash,
-        "zsh" => shells::Zsh,
-        "fish" => shells::Fish,
-        "powershell" => shells::PowerShell,
+    let shell_type = match shell.to_lowercase().as_str() {
+        "bash" => Shell::Bash,
+        "zsh" => Shell::Zsh,
+        "fish" => Shell::Fish,
+        "powershell" => Shell::PowerShell,
         _ => return Err(anyhow::anyhow!("Unsupported shell: {}", shell)),
     };
 
-    generate(shell, &mut app, "ghostwave", &mut io::stdout());
+    generate(shell_type, &mut app, "ghostwave", &mut io::stdout());
     Ok(())
 }
 

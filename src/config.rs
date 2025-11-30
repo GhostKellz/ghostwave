@@ -22,6 +22,18 @@ pub struct AudioConfig {
     pub channels: u8,
     pub input_device: Option<String>,
     pub output_device: Option<String>,
+    #[serde(default = "default_latency")]
+    pub target_latency_ms: f32,
+    #[serde(default = "default_backend")]
+    pub backend: String,
+}
+
+fn default_latency() -> f32 {
+    10.0
+}
+
+fn default_backend() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +81,13 @@ impl Config {
         Ok(config)
     }
 
+    pub fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .with_context(|| format!("Failed to read config from {:?}", path.as_ref()))?;
+        serde_json::from_str(&content)
+            .with_context(|| "Failed to parse config JSON")
+    }
+
     pub fn with_overrides(mut self, sample_rate: Option<u32>, frames: Option<u32>) -> Self {
         if let Some(rate) = sample_rate {
             self.audio.sample_rate = rate;
@@ -99,6 +118,8 @@ impl Config {
                 channels: 2,
                 input_device: None,
                 output_device: None,
+                target_latency_ms: 10.0,
+                backend: "auto".to_string(),
             },
             noise_suppression: NoiseSuppressionConfig {
                 enabled: true,
@@ -121,6 +142,8 @@ impl Config {
                 channels: 2,
                 input_device: None,
                 output_device: None,
+                target_latency_ms: 10.0,
+                backend: "auto".to_string(),
             },
             noise_suppression: NoiseSuppressionConfig {
                 enabled: true,
@@ -143,6 +166,8 @@ impl Config {
                 channels: 2,
                 input_device: None,
                 output_device: None,
+                target_latency_ms: 5.0,
+                backend: "auto".to_string(),
             },
             noise_suppression: NoiseSuppressionConfig {
                 enabled: true,
