@@ -3,13 +3,15 @@ use tracing::{info, debug, warn};
 
 #[cfg(feature = "nvidia-rtx")]
 use cudarc::driver::CudaDevice;
+#[cfg(feature = "nvidia-rtx")]
+use std::sync::Arc;
 
 /// RTX GPU acceleration for noise suppression
 /// Leverages NVIDIA's open GPU kernel modules for RTX 20 series and newer
 /// Supports up to RTX 50 series (Blackwell architecture) with enhanced optimizations
 pub struct RtxAccelerator {
     #[cfg(feature = "nvidia-rtx")]
-    device: Option<CudaDevice>,
+    device: Option<Arc<CudaDevice>>,
 
     /// Fallback to CPU when GPU is not available
     cpu_fallback: bool,
@@ -125,15 +127,15 @@ impl RtxAccelerator {
     }
 
     #[cfg(feature = "nvidia-rtx")]
-    fn init_cuda() -> Result<(CudaDevice, (u32, u32))> {
+    fn init_cuda() -> Result<(Arc<CudaDevice>, (u32, u32))> {
         info!("Detecting NVIDIA RTX GPU with open drivers...");
 
         // Initialize CUDA device
         let device = CudaDevice::new(0)?;
 
         // Get compute capability
-        let major = device.get_attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
-        let minor = device.get_attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
+        let major = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
+        let minor = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)?;
         let compute_capability = (major as u32, minor as u32);
 
         // Check if this is RTX 20 series or newer (compute capability >= 7.5)
@@ -191,7 +193,9 @@ impl RtxAccelerator {
                 let tensor_core_gen = gpu_gen.tensor_core_generation();
 
                 // Get memory info
-                let memory_bytes = device.total_memory().unwrap_or(0);
+                let memory_bytes = cudarc::driver::result::mem_get_info()
+                    .map(|(_free, total)| total)
+                    .unwrap_or(0);
                 let memory_gb = memory_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
 
                 return Some(RtxCapabilities {
