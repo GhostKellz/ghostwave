@@ -22,7 +22,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::fs;
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug, warn};
 
 /// Model type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,6 +173,7 @@ impl Default for ModelRepository {
 }
 
 /// Model manager for loading and managing AI models
+#[allow(dead_code)] // Public API - manages model lifecycle
 pub struct ModelManager {
     /// Model directory path
     model_dir: PathBuf,

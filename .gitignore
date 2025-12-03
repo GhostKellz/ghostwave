@@ -9,3 +9,6 @@ Cargo.lock
 
 #/target
 CLAUDE.md
+
+# Archive directory - not tracked
+archive/

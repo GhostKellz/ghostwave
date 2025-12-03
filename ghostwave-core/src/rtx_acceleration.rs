@@ -1,10 +1,52 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{info, debug, warn};
 
 #[cfg(feature = "nvidia-rtx")]
 use cudarc::driver::CudaDevice;
 #[cfg(feature = "nvidia-rtx")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "nvidia-rtx")]
+use crate::rtx_denoising::{RtxDenoiser, RtxDenoiseConfig, DenoiseStrength, DenoiseAlgorithm};
+
+#[cfg(feature = "nvidia-rtx")]
+static RTX_DENOISER_CACHE: OnceLock<Arc<Mutex<SharedRtxDenoiser>>> = OnceLock::new();
+
+/// Status of GPU processing - whether fallback to CPU occurred
+#[derive(Debug, Clone, Default)]
+pub struct GpuProcessingStatus {
+    /// True if GPU is being used successfully
+    pub gpu_active: bool,
+    /// True if CPU fallback is currently in use
+    pub fallback_active: bool,
+    /// Number of times GPU failed and fell back to CPU
+    pub fallback_count: u64,
+    /// Reason for fallback (if any)
+    pub fallback_reason: Option<String>,
+}
+
+// Global fallback tracking (thread-safe)
+static GPU_FALLBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static GPU_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+static GPU_FALLBACK_REASON: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
+
+#[cfg(feature = "nvidia-rtx")]
+struct SharedRtxDenoiser {
+    denoiser: Option<RtxDenoiser>,
+    fft_size: usize,
+    hop_size: usize,
+}
+
+#[cfg(feature = "nvidia-rtx")]
+impl Default for SharedRtxDenoiser {
+    fn default() -> Self {
+        Self {
+            denoiser: None,
+            fft_size: 0,
+            hop_size: 0,
+        }
+    }
+}
 
 /// RTX GPU acceleration for noise suppression
 /// Leverages NVIDIA's open GPU kernel modules for RTX 20 series and newer
@@ -13,8 +55,12 @@ pub struct RtxAccelerator {
     #[cfg(feature = "nvidia-rtx")]
     device: Option<Arc<CudaDevice>>,
 
+    #[cfg(feature = "nvidia-rtx")]
+    shared_denoiser: Arc<Mutex<SharedRtxDenoiser>>,
+
     /// Fallback to CPU when GPU is not available
     cpu_fallback: bool,
+
 
     /// GPU compute capability for RTX features
     compute_capability: Option<(u32, u32)>,
@@ -39,8 +85,9 @@ impl GpuGeneration {
             (7, 5) => Self::Turing,
             (8, 6) => Self::Ampere,
             (8, 9) => Self::AdaLovelace,
-            (10, 0) => Self::Blackwell,
-            _ if major >= 10 => Self::Blackwell, // Future Blackwell variants
+            // Blackwell: SM 10.0 and 12.0 (RTX 5090 reports compute 12.0)
+            (10, _) | (12, _) => Self::Blackwell,
+            _ if major >= 10 => Self::Blackwell, // Future architectures
             _ => Self::Unknown,
         }
     }
@@ -58,6 +105,29 @@ impl GpuGeneration {
             Self::Unknown => 0,
         }
     }
+}
+
+/// GPU readiness status for different subsystems
+#[derive(Debug, Clone, Default)]
+pub struct RtxReadiness {
+    pub driver_ok: bool,
+    pub cuda_ok: bool,
+    pub tensorrt_ok: bool,
+    pub fp4_ready: bool,
+}
+
+/// Comprehensive RTX system information returned by diagnostics
+#[derive(Debug, Clone)]
+pub struct RtxSystemInfo {
+    pub gpu_name: Option<String>,
+    pub driver_version: Option<String>,
+    pub cuda_version: Option<String>,
+    pub tensorrt_version: Option<String>,
+    pub readiness: RtxReadiness,
+    pub compute_capability: (u32, u32),
+    pub gpu_generation: GpuGeneration,
+    pub tensor_core_gen: u8,
+    pub memory_gb: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -94,23 +164,31 @@ impl RtxAccelerator {
                         info!("   🚀 RTX 50 Series (Blackwell) - 5th-gen Tensor Cores with FP4 support");
                     }
 
+                    let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
+
                     Ok(Self {
                         device: Some(device),
+                        shared_denoiser: shared,
                         cpu_fallback: false,
                         compute_capability: Some(compute_capability),
                         gpu_generation: gpu_gen,
                     })
+
                 }
                 Err(e) => {
                     warn!("⚠️  NVIDIA RTX acceleration unavailable: {}", e);
                     warn!("   Falling back to CPU processing");
 
+                    let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
+
                     Ok(Self {
                         device: None,
+                        shared_denoiser: shared,
                         cpu_fallback: true,
                         compute_capability: None,
                         gpu_generation: GpuGeneration::Unknown,
                     })
+
                 }
             }
         }
@@ -118,6 +196,7 @@ impl RtxAccelerator {
         #[cfg(not(feature = "nvidia-rtx"))]
         {
             info!("💻 RTX feature not compiled - using CPU processing");
+
             Ok(Self {
                 cpu_fallback: true,
                 compute_capability: None,
@@ -180,7 +259,7 @@ impl RtxAccelerator {
     pub fn get_capabilities(&self) -> Option<RtxCapabilities> {
         #[cfg(feature = "nvidia-rtx")]
         {
-            if let Some(device) = &self.device {
+            if let Some(_device) = &self.device {
                 let compute_capability = self.compute_capability.unwrap_or((0, 0));
 
                 let gpu_gen = self.gpu_generation;
@@ -218,79 +297,184 @@ impl RtxAccelerator {
     /// Process audio with RTX-accelerated noise suppression
     /// Uses architecture-specific optimizations (FP4 for Blackwell, FP16 for older)
     pub fn process_spectral_denoising(&self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
+        if input.len() != output.len() {
+            return Err(anyhow::anyhow!("Input and output buffer size mismatch"));
+        }
+
         #[cfg(feature = "nvidia-rtx")]
         {
             if let Some(_device) = &self.device {
                 debug!("Processing with RTX GPU acceleration");
 
-                // Use FP4 precision for Blackwell (RTX 50 series) for 2-3x speedup
-                if self.gpu_generation == GpuGeneration::Blackwell {
-                    debug!("Using FP4 Tensor Core acceleration (RTX 50 series)");
-                    return self.gpu_spectral_denoise_fp4(input, output, strength);
+                // Only use FP4 if Blackwell AND driver supports it (590+)
+                let use_fp4 = self.gpu_generation == GpuGeneration::Blackwell
+                    && Self::check_driver_supports_fp4();
+
+                // Log at info level on first use, then debug for subsequent calls
+                static LOGGED_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                let first_call = !LOGGED_MODE.swap(true, Ordering::Relaxed);
+
+                let gpu_result = if use_fp4 {
+                    if first_call {
+                        info!("🚀 Using FP4 Tensor Core acceleration (RTX 50 series + driver 590+)");
+                    } else {
+                        debug!("Using FP4 Tensor Core acceleration");
+                    }
+                    self.gpu_spectral_denoise_fp4(input, output, strength)
                 } else {
-                    debug!("Using FP16 Tensor Core acceleration");
-                    return self.gpu_spectral_denoise(input, output, strength);
+                    if first_call {
+                        // Visible at info level so users know they're running FP16
+                        info!("⚡ Using FP16 Tensor Core acceleration (upgrade driver to 590+ for FP4)");
+                    } else {
+                        debug!("Using FP16 Tensor Core acceleration");
+                    }
+                    self.gpu_spectral_denoise(input, output, strength)
+                };
+
+                match gpu_result {
+                    Ok(()) => {
+                        // GPU succeeded - mark as active
+                        Self::set_gpu_status(true, None);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        // GPU failed - track fallback
+                        let reason = format!("GPU processing failed: {}", err);
+                        warn!("{}. Falling back to CPU path", reason);
+                        Self::set_gpu_status(false, Some(reason));
+                    }
                 }
+            } else {
+                // No GPU device available
+                Self::set_gpu_status(false, Some("GPU device not available".to_string()));
             }
         }
 
-        // CPU fallback
-        debug!("Processing with CPU fallback");
+        #[cfg(not(feature = "nvidia-rtx"))]
+        {
+            Self::set_gpu_status(false, Some("RTX feature not compiled".to_string()));
+        }
+
+        // CPU fallback - log at info level once so users know
+        static LOGGED_CPU_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED_CPU_FALLBACK.swap(true, Ordering::Relaxed) {
+            info!("💻 Processing with CPU fallback (RTX GPU not available or failed)");
+        } else {
+            debug!("Processing with CPU fallback");
+        }
         self.cpu_spectral_denoise(input, output, strength)
+    }
+
+    /// Get current GPU processing status
+    pub fn get_gpu_status() -> GpuProcessingStatus {
+        let fallback_active = GPU_FALLBACK_ACTIVE.load(Ordering::Relaxed);
+        let fallback_count = GPU_FALLBACK_COUNT.load(Ordering::Relaxed);
+        let fallback_reason = GPU_FALLBACK_REASON
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+
+        GpuProcessingStatus {
+            gpu_active: !fallback_active,
+            fallback_active,
+            fallback_count,
+            fallback_reason,
+        }
+    }
+
+    /// Update GPU processing status
+    fn set_gpu_status(gpu_active: bool, reason: Option<String>) {
+        let was_fallback = GPU_FALLBACK_ACTIVE.load(Ordering::Relaxed);
+        let now_fallback = !gpu_active;
+
+        GPU_FALLBACK_ACTIVE.store(now_fallback, Ordering::Relaxed);
+
+        // Increment fallback count when transitioning to fallback
+        if now_fallback && !was_fallback {
+            GPU_FALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Update reason
+        if let Some(mutex) = GPU_FALLBACK_REASON.get_or_init(|| std::sync::Mutex::new(None)).lock().ok().as_mut() {
+            **mutex = reason;
+        }
     }
 
     #[cfg(feature = "nvidia-rtx")]
     fn gpu_spectral_denoise(&self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
-        // This is a simplified implementation using FP16 Tensor Cores
-        // In a full implementation, this would:
-        // 1. Transfer audio to GPU memory using device.htod_copy()
-        // 2. Perform FFT using custom CUDA kernels or cuFFT
-        // 3. Apply spectral gating using FP16 tensor cores for ML-based denoising
-        // 4. Perform inverse FFT
-        // 5. Transfer result back to CPU using device.dtoh_sync_copy()
-
         debug!("RTX spectral denoising (FP16) - strength: {:.2}", strength);
-
-        if let Some(ref _device) = self.device {
-            // TODO: Implement full GPU-accelerated spectral processing
-            // This would involve custom CUDA kernels for:
-            // - FFT-based spectral analysis (cuFFT)
-            // - Tensor Core-accelerated noise profile learning (FP16 matmul)
-            // - Real-time spectral subtraction/gating
-            debug!("GPU memory transfer and FP16 processing would happen here");
-        }
-
-        // For now, fallback to CPU implementation
-        self.cpu_spectral_denoise(input, output, strength)
+        self.run_rtx_denoiser(input, output, strength, false)
     }
 
     #[cfg(feature = "nvidia-rtx")]
     fn gpu_spectral_denoise_fp4(&self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
-        // RTX 50 series (Blackwell) FP4 optimization
-        // FP4 Tensor Cores provide 2-3x throughput vs FP16 for AI inference
-        // Perfect for real-time noise suppression models
-
         debug!("RTX 50 Blackwell spectral denoising (FP4) - strength: {:.2}", strength);
         debug!("Using 5th-gen Tensor Cores with FP4 precision for maximum throughput");
+        self.run_rtx_denoiser(input, output, strength, true)
+    }
 
-        if let Some(ref _device) = self.device {
-            // TODO: Implement Blackwell-optimized spectral processing
-            // FP4 advantages for RTX 50 series:
-            // - 2-3x faster inference vs FP16
-            // - Lower power consumption
-            // - Perfect for lightweight noise suppression DNNs
-            // - Can run larger/better models in real-time
-
-            // Implementation would use:
-            // - cuDNN with FP4 Tensor Core ops
-            // - Custom CUDA kernels compiled with -arch=sm_100 (Blackwell)
-            // - TensorRT with FP4 quantization for optimal performance
-            debug!("GPU FP4 Tensor Core processing would happen here");
-            debug!("Expected latency: <5ms for RTX 5090 (vs ~10ms on RTX 40 series)");
+    #[cfg(feature = "nvidia-rtx")]
+    fn run_rtx_denoiser(&self, input: &[f32], output: &mut [f32], strength: f32, prefer_fp4: bool) -> Result<()> {
+        if input.len() != output.len() {
+            return Err(anyhow::anyhow!("Input and output buffer size mismatch"));
         }
 
-        // For now, fallback to CPU implementation
-        self.cpu_spectral_denoise(input, output, strength)
+        let mut shared = self
+            .shared_denoiser
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock shared RTX denoiser"))?;
+
+        let target_fft = input.len().next_power_of_two().max(1024).min(4096);
+        let target_hop = target_fft / 4;
+
+        if shared.denoiser.is_none() || shared.fft_size != target_fft {
+            debug!("Initializing RTX denoiser context (fft: {}, hop: {})", target_fft, target_hop);
+            let mut config = RtxDenoiseConfig::default();
+            config.strength = match strength {
+                s if s < 0.3 => DenoiseStrength::Light,
+                s if s < 0.6 => DenoiseStrength::Moderate,
+                s if s < 0.85 => DenoiseStrength::Aggressive,
+                _ => DenoiseStrength::Maximum,
+            };
+            config.algorithm = if prefer_fp4 {
+                DenoiseAlgorithm::TensorTransformer
+            } else {
+                DenoiseAlgorithm::TensorRnn
+            };
+            config.use_tensor_cores = true;
+            config.fft_size = target_fft;
+            config.hop_size = target_hop;
+
+            debug!(
+                "RTX denoiser config -> fft: {}, hop: {}, algo: {:?}, strength: {:?}",
+                config.fft_size, config.hop_size, config.algorithm, config.strength
+            );
+
+            let denoiser = RtxDenoiser::new(config)?;
+            shared.fft_size = target_fft;
+            shared.hop_size = target_hop;
+            shared.denoiser = Some(denoiser);
+        } else {
+            debug!(
+                "Reusing RTX denoiser (fft: {}, hop: {})",
+                shared.fft_size, shared.hop_size
+            );
+        }
+
+        let denoiser = shared
+            .denoiser
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("RTX denoiser unavailable"))?;
+
+        if prefer_fp4 {
+            let stats = denoiser.get_stats();
+            if !stats.using_tensor_cores {
+                warn!("FP4 requested but tensor cores inactive, falling back to FP16");
+            }
+        }
+
+        denoiser.process(input, output)
     }
 
     fn cpu_spectral_denoise(&self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
@@ -328,6 +512,30 @@ impl RtxAccelerator {
         }
     }
 
+    /// Check if driver version supports FP4 (requires 590+)
+    #[cfg(feature = "nvidia-rtx")]
+    fn check_driver_supports_fp4() -> bool {
+        // Read driver version from /proc/driver/nvidia/version
+        if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version") {
+            if let Some(line) = version_str.lines().next() {
+                // Parse: "NVRM version: NVIDIA UNIX x86_64 Kernel Module  590.44.01  ..."
+                if let Some(ver_start) = line.find("Module") {
+                    let ver_part = &line[ver_start + 6..];
+                    if let Some(ver) = ver_part.trim().split_whitespace().next() {
+                        if let Some(major_str) = ver.split('.').next() {
+                            if let Ok(major) = major_str.parse::<u32>() {
+                                return major >= 590;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Default: don't enable FP4 if we can't verify driver version
+        false
+    }
+
     pub fn get_processing_mode(&self) -> &'static str {
         if self.is_rtx_available() {
             "NVIDIA RTX GPU"
@@ -338,8 +546,19 @@ impl RtxAccelerator {
 }
 
 /// Check system for NVIDIA RTX capability
-pub fn check_rtx_system_requirements() -> Result<()> {
+/// Returns comprehensive system info for diagnostics
+pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
     info!("🔍 Checking RTX system requirements...");
+
+    let mut readiness = RtxReadiness::default();
+    let mut gpu_name: Option<String> = None;
+    let mut driver_version: Option<String> = None;
+    let mut cuda_version: Option<String> = None;
+    let mut tensorrt_version: Option<String> = None;
+    let mut compute_capability = (0u32, 0u32);
+    let mut gpu_generation = GpuGeneration::Unknown;
+    let mut tensor_core_gen = 0u8;
+    let mut memory_gb = 0.0f32;
 
     // Check for NVIDIA open drivers
     match std::fs::read_to_string("/proc/version") {
@@ -354,6 +573,7 @@ pub fn check_rtx_system_requirements() -> Result<()> {
         Ok(modules) => {
             if modules.contains("nvidia") {
                 info!("✅ NVIDIA kernel modules loaded");
+                readiness.driver_ok = true;
 
                 if modules.contains("nvidia_drm") {
                     info!("✅ NVIDIA DRM module loaded (good for Wayland)");
@@ -367,17 +587,164 @@ pub fn check_rtx_system_requirements() -> Result<()> {
     }
 
     // Check for CUDA runtime
-    if std::path::Path::new("/usr/lib/libcuda.so").exists()
+    let cuda_found = std::path::Path::new("/usr/lib/libcuda.so").exists()
         || std::path::Path::new("/usr/lib64/libcuda.so").exists()
-        || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libcuda.so").exists() {
+        || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libcuda.so").exists();
+
+    if cuda_found {
         info!("✅ CUDA runtime library found");
+        readiness.cuda_ok = true;
+        cuda_version = Some("12.0+".to_string());
     } else {
         warn!("⚠️  CUDA runtime library not found");
         warn!("   Install nvidia-utils or cuda-runtime package");
     }
 
+    // Check for TensorRT
+    let tensorrt_found = std::path::Path::new("/usr/lib/libnvinfer.so").exists()
+        || std::path::Path::new("/usr/lib64/libnvinfer.so").exists()
+        || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libnvinfer.so").exists();
+
+    if tensorrt_found {
+        info!("✅ TensorRT library found");
+        readiness.tensorrt_ok = true;
+        tensorrt_version = Some("8.0+".to_string());
+    } else {
+        debug!("TensorRT not found (optional for enhanced AI denoising)");
+    }
+
+    // Try to get driver version from nvidia-smi or /proc
+    if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version") {
+        if let Some(line) = version_str.lines().next() {
+            // Parse: "NVRM version: NVIDIA UNIX x86_64 Kernel Module  590.44.01  ..."
+            if let Some(ver_start) = line.find("Module") {
+                let ver_part = &line[ver_start + 6..];
+                let ver = ver_part.trim().split_whitespace().next().unwrap_or("Unknown");
+                driver_version = Some(ver.to_string());
+                info!("Driver version: {}", ver);
+
+                // Check if driver supports RTX 50 series (590+)
+                if let Ok(major) = ver.split('.').next().unwrap_or("0").parse::<u32>() {
+                    if major >= 590 {
+                        info!("✅ Driver supports RTX 50 series (Blackwell)");
+                    }
+                }
+            }
+        }
+    }
+
+    // Try to detect GPU via /proc/driver/nvidia/gpus
+    if let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") {
+        for entry in entries.flatten() {
+            let info_path = entry.path().join("information");
+            if let Ok(info) = std::fs::read_to_string(&info_path) {
+                for line in info.lines() {
+                    if line.starts_with("Model:") {
+                        gpu_name = Some(line.replace("Model:", "").trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Detect GPU generation and capabilities via CUDA if available
+    #[cfg(feature = "nvidia-rtx")]
+    {
+        if let Ok(device) = cudarc::driver::CudaDevice::new(0) {
+            if let Ok(major) = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR) {
+                if let Ok(minor) = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR) {
+                    compute_capability = (major as u32, minor as u32);
+                    gpu_generation = GpuGeneration::from_compute_capability(major as u32, minor as u32);
+                    tensor_core_gen = gpu_generation.tensor_core_generation();
+
+                    // FP4 ready on Blackwell (compute 10.0+) with driver >= 590
+                    if major >= 10 || major == 12 { // Blackwell reports 12.0
+                        // Check driver version for FP4 support
+                        let driver_ready = driver_version.as_ref()
+                            .and_then(|v| v.split('.').next())
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .map(|v| v >= 590)
+                            .unwrap_or(false);
+
+                        if driver_ready {
+                            readiness.fp4_ready = true;
+                            info!("✅ FP4 Tensor Core support available (Blackwell + driver 590+)");
+                        } else {
+                            warn!("⚠️  FP4 support requires driver 590+, current: {}",
+                                  driver_version.as_deref().unwrap_or("unknown"));
+                            info!("   FP16 Tensor Cores will be used instead");
+                        }
+                    }
+                }
+            }
+
+            if let Ok((_free, total)) = cudarc::driver::result::mem_get_info() {
+                memory_gb = total as f32 / (1024.0 * 1024.0 * 1024.0);
+            }
+        }
+    }
+
+    // Fallback detection without CUDA feature
+    #[cfg(not(feature = "nvidia-rtx"))]
+    {
+        // Try to parse compute capability from nvidia-smi output if available
+        if let Ok(output) = std::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=compute_cap,memory.total,name", "--format=csv,noheader,nounits"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+                    if parts.len() >= 3 {
+                        // Parse compute capability (e.g., "10.0" or "12.0")
+                        if let Some((major_str, minor_str)) = parts[0].split_once('.') {
+                            if let (Ok(major), Ok(minor)) = (major_str.parse::<u32>(), minor_str.parse::<u32>()) {
+                                compute_capability = (major, minor);
+                                gpu_generation = GpuGeneration::from_compute_capability(major, minor);
+                                tensor_core_gen = gpu_generation.tensor_core_generation();
+
+                                // FP4 requires Blackwell (compute 10.0+ or 12.0) AND driver 590+
+                                if major >= 10 || major == 12 {
+                                    let driver_ready = driver_version.as_ref()
+                                        .and_then(|v| v.split('.').next())
+                                        .and_then(|v| v.parse::<u32>().ok())
+                                        .map(|v| v >= 590)
+                                        .unwrap_or(false);
+
+                                    if driver_ready {
+                                        readiness.fp4_ready = true;
+                                    }
+                                }
+                            }
+                        }
+                        // Parse memory (e.g., "32768" MB)
+                        if let Ok(mem_mb) = parts[1].parse::<f32>() {
+                            memory_gb = mem_mb / 1024.0;
+                        }
+                        // GPU name
+                        if gpu_name.is_none() {
+                            gpu_name = Some(parts[2].to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     info!("System check complete");
-    Ok(())
+
+    Ok(RtxSystemInfo {
+        gpu_name,
+        driver_version,
+        cuda_version,
+        tensorrt_version,
+        readiness,
+        compute_capability,
+        gpu_generation,
+        tensor_core_gen,
+        memory_gb,
+    })
 }
 
 #[cfg(test)]

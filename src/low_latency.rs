@@ -1,13 +1,21 @@
 use anyhow::Result;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::collections::VecDeque;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 /// Target latency for real-time audio processing
 pub const TARGET_LATENCY_MS: u32 = 15;
 
+/// Maximum samples retained when summarizing frame latency
+const LATENCY_HISTORY_CAPACITY: usize = 8192;
+
 /// Lock-free ring buffer for zero-copy audio processing
+#[allow(dead_code)] // Public API for audio buffering
 pub struct LockFreeAudioBuffer {
     buffer: Vec<f32>,
     capacity: usize,
@@ -18,7 +26,10 @@ pub struct LockFreeAudioBuffer {
 
 impl LockFreeAudioBuffer {
     pub fn new(capacity_frames: usize, sample_rate: u32) -> Self {
-        info!("Creating lock-free audio buffer: {} frames, {}Hz", capacity_frames, sample_rate);
+        info!(
+            "Creating lock-free audio buffer: {} frames, {}Hz",
+            capacity_frames, sample_rate
+        );
 
         Self {
             buffer: vec![0.0; capacity_frames],
@@ -51,21 +62,13 @@ impl LockFreeAudioBuffer {
             // Single write
             unsafe {
                 let buffer_ptr = self.buffer.as_ptr() as *mut f32;
-                std::ptr::copy_nonoverlapping(
-                    data.as_ptr(),
-                    buffer_ptr.add(write_pos),
-                    to_write,
-                );
+                std::ptr::copy_nonoverlapping(data.as_ptr(), buffer_ptr.add(write_pos), to_write);
             }
         } else {
             // Split write
             unsafe {
                 let buffer_ptr = self.buffer.as_ptr() as *mut f32;
-                std::ptr::copy_nonoverlapping(
-                    data.as_ptr(),
-                    buffer_ptr.add(write_pos),
-                    end_space,
-                );
+                std::ptr::copy_nonoverlapping(data.as_ptr(), buffer_ptr.add(write_pos), end_space);
                 std::ptr::copy_nonoverlapping(
                     data.as_ptr().add(end_space),
                     buffer_ptr,
@@ -102,11 +105,7 @@ impl LockFreeAudioBuffer {
             // Single read
             unsafe {
                 let buffer_ptr = self.buffer.as_ptr();
-                std::ptr::copy_nonoverlapping(
-                    buffer_ptr.add(read_pos),
-                    data.as_mut_ptr(),
-                    to_read,
-                );
+                std::ptr::copy_nonoverlapping(buffer_ptr.add(read_pos), data.as_mut_ptr(), to_read);
             }
         } else {
             // Split read
@@ -131,6 +130,7 @@ impl LockFreeAudioBuffer {
         Ok(to_read)
     }
 
+    #[allow(dead_code)] // Public API for buffer status
     pub fn available_for_write(&self) -> usize {
         let write_pos = self.write_pos.load(Ordering::Acquire);
         let read_pos = self.read_pos.load(Ordering::Acquire);
@@ -142,6 +142,7 @@ impl LockFreeAudioBuffer {
         }
     }
 
+    #[allow(dead_code)] // Public API for buffer status
     pub fn available_for_read(&self) -> usize {
         let read_pos = self.read_pos.load(Ordering::Acquire);
         let write_pos = self.write_pos.load(Ordering::Acquire);
@@ -155,6 +156,7 @@ impl LockFreeAudioBuffer {
 }
 
 /// Real-time audio processing scheduler
+#[allow(dead_code)] // Public API for scheduling
 pub struct RealTimeScheduler {
     target_latency: Duration,
     buffer_size: usize,
@@ -164,13 +166,16 @@ pub struct RealTimeScheduler {
 
 impl RealTimeScheduler {
     pub fn new(sample_rate: u32, buffer_size: usize) -> Self {
-        let frame_duration = Duration::from_micros(
-            (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64
-        );
+        let frame_duration =
+            Duration::from_micros((buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64);
         let target_latency = Duration::from_millis(TARGET_LATENCY_MS as u64);
 
-        info!("RealTime scheduler: {}Hz, {} frames, {:.2}ms target latency",
-              sample_rate, buffer_size, target_latency.as_secs_f64() * 1000.0);
+        info!(
+            "RealTime scheduler: {}Hz, {} frames, {:.2}ms target latency",
+            sample_rate,
+            buffer_size,
+            target_latency.as_secs_f64() * 1000.0
+        );
 
         Self {
             target_latency,
@@ -199,7 +204,8 @@ impl RealTimeScheduler {
             unsafe {
                 // Set thread name
                 let name = b"ghostwave-rt\0";
-                let result = pthread_setname_np(libc::pthread_self(), name.as_ptr() as *const libc::c_char);
+                let result =
+                    pthread_setname_np(libc::pthread_self(), name.as_ptr() as *const libc::c_char);
                 if result == 0 {
                     debug!("Set thread name to 'ghostwave-rt'");
                 } else {
@@ -211,7 +217,9 @@ impl RealTimeScheduler {
                 if result == 0 {
                     info!("✅ Set real-time scheduling with priority {}", RT_PRIORITY);
                 } else {
-                    warn!("⚠️  Failed to set real-time priority (need CAP_SYS_NICE or run as root)");
+                    warn!(
+                        "⚠️  Failed to set real-time priority (need CAP_SYS_NICE or run as root)"
+                    );
                     info!("Consider: sudo setcap cap_sys_nice+ep ./ghostwave");
                 }
             }
@@ -232,16 +240,16 @@ impl RealTimeScheduler {
         // Clamp to reasonable bounds
         buffer_size = buffer_size.max(32).min(2048);
 
-        info!("Optimal buffer size for {}Hz @ {}ms latency: {} frames",
-              sample_rate, target_latency_ms, buffer_size);
+        info!(
+            "Optimal buffer size for {}Hz @ {}ms latency: {} frames",
+            sample_rate, target_latency_ms, buffer_size
+        );
 
         buffer_size
     }
 
     pub fn calculate_latency(&self, buffer_size: usize) -> Duration {
-        Duration::from_micros(
-            (buffer_size as f64 / self.sample_rate as f64 * 1_000_000.0) as u64
-        )
+        Duration::from_micros((buffer_size as f64 / self.sample_rate as f64 * 1_000_000.0) as u64)
     }
 
     pub fn sleep_until_next_frame(&self, start_time: Instant) {
@@ -264,28 +272,29 @@ impl RealTimeScheduler {
 
 /// Performance benchmarking for audio processing
 pub struct AudioBenchmark {
-    processing_times: Vec<Duration>,
     frame_count: AtomicU64,
     xrun_count: AtomicU64,
     max_processing_time: AtomicU64, // in nanoseconds
     target_frame_time: Duration,
+    latency_history: Mutex<VecDeque<f64>>,
 }
 
 impl AudioBenchmark {
     pub fn new(sample_rate: u32, buffer_size: usize) -> Self {
-        let target_frame_time = Duration::from_micros(
-            (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64
+        let target_frame_time =
+            Duration::from_micros((buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64);
+
+        info!(
+            "Audio benchmark initialized: target frame time = {:.2}μs",
+            target_frame_time.as_micros()
         );
 
-        info!("Audio benchmark initialized: target frame time = {:.2}μs",
-              target_frame_time.as_micros());
-
         Self {
-            processing_times: Vec::with_capacity(10000),
             frame_count: AtomicU64::new(0),
             xrun_count: AtomicU64::new(0),
             max_processing_time: AtomicU64::new(0),
             target_frame_time,
+            latency_history: Mutex::new(VecDeque::with_capacity(LATENCY_HISTORY_CAPACITY)),
         }
     }
 
@@ -295,23 +304,64 @@ impl AudioBenchmark {
         let processing_ns = processing_time.as_nanos() as u64;
         let current_max = self.max_processing_time.load(Ordering::Relaxed);
         if processing_ns > current_max {
-            self.max_processing_time.store(processing_ns, Ordering::Relaxed);
+            self.max_processing_time
+                .store(processing_ns, Ordering::Relaxed);
         }
+
+        // Track history for percentile reporting
+        let mut history = self
+            .latency_history
+            .lock()
+            .expect("latency history poisoned");
+        let micros = processing_time.as_secs_f64() * 1_000_000.0;
+        if history.len() == LATENCY_HISTORY_CAPACITY {
+            history.pop_front();
+        }
+        history.push_back(micros);
+        drop(history);
 
         // Check for XRuns (processing took longer than available time)
         if processing_time > self.target_frame_time {
             self.xrun_count.fetch_add(1, Ordering::Relaxed);
-            warn!("XRun detected: processing took {:.2}μs (target: {:.2}μs)",
-                  processing_time.as_micros(), self.target_frame_time.as_micros());
+            warn!(
+                "XRun detected: processing took {:.2}μs (target: {:.2}μs)",
+                processing_time.as_micros(),
+                self.target_frame_time.as_micros()
+            );
         }
     }
 
     pub fn get_stats(&self) -> BenchmarkStats {
+        let history = self
+            .latency_history
+            .lock()
+            .expect("latency history poisoned");
+        let mut sorted: Vec<f64> = history.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let p99_latency_us = if sorted.is_empty() {
+            0.0
+        } else {
+            let idx = ((sorted.len() as f64) * 0.99)
+                .floor()
+                .clamp(0.0, (sorted.len() - 1) as f64) as usize;
+            sorted[idx]
+        };
+        let avg_latency_us = if sorted.is_empty() {
+            0.0
+        } else {
+            sorted.iter().sum::<f64>() / sorted.len() as f64
+        };
+        drop(history);
+
         BenchmarkStats {
             total_frames: self.frame_count.load(Ordering::Relaxed),
             xrun_count: self.xrun_count.load(Ordering::Relaxed),
-            max_processing_time: Duration::from_nanos(self.max_processing_time.load(Ordering::Relaxed)),
+            max_processing_time: Duration::from_nanos(
+                self.max_processing_time.load(Ordering::Relaxed),
+            ),
             target_frame_time: self.target_frame_time,
+            p99_latency_us,
+            avg_latency_us,
         }
     }
 
@@ -325,14 +375,22 @@ impl AudioBenchmark {
 
         info!("📊 Audio Performance Stats:");
         info!("  Frames processed: {}", stats.total_frames);
-        info!("  XRuns: {} ({:.3}%)", stats.xrun_count, xrun_rate);
-        info!("  Max processing time: {:.2}μs", stats.max_processing_time.as_micros());
-        info!("  Target frame time: {:.2}μs", stats.target_frame_time.as_micros());
+        info!("  XRUns: {} ({:.3}%)", stats.xrun_count, xrun_rate);
+        info!("  Avg frame latency: {:.2}μs", stats.avg_latency_us);
+        info!("  P99 frame latency: {:.2}μs", stats.p99_latency_us);
+        info!(
+            "  Max processing time: {:.2}μs",
+            stats.max_processing_time.as_micros()
+        );
+        info!(
+            "  Target frame time: {:.2}μs",
+            stats.target_frame_time.as_micros()
+        );
 
         if xrun_rate > 1.0 {
             warn!("⚠️  High XRun rate detected - consider increasing buffer size");
         } else if xrun_rate == 0.0 {
-            info!("✅ Perfect real-time performance - no XRuns detected");
+            info!("✅ Perfect real-time performance - no XRUns detected");
         }
     }
 }
@@ -343,6 +401,8 @@ pub struct BenchmarkStats {
     pub xrun_count: u64,
     pub max_processing_time: Duration,
     pub target_frame_time: Duration,
+    pub p99_latency_us: f64,
+    pub avg_latency_us: f64,
 }
 
 /// Memory pool for zero-allocation audio buffers
@@ -359,11 +419,15 @@ impl AudioMemoryPool {
         // Pre-allocate buffers
         for _ in 0..pool_size {
             let buffer = vec![0.0f32; buffer_size];
-            sender.send(buffer).expect("Failed to initialize memory pool");
+            sender
+                .send(buffer)
+                .expect("Failed to initialize memory pool");
         }
 
-        info!("Audio memory pool created: {} buffers of {} samples each",
-              pool_size, buffer_size);
+        info!(
+            "Audio memory pool created: {} buffers of {} samples each",
+            pool_size, buffer_size
+        );
 
         Self {
             buffers: receiver,

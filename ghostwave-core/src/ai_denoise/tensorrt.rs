@@ -22,7 +22,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::ffi::c_void;
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug};
 
 use super::inference::GpuArchitecture;
 
@@ -102,6 +102,7 @@ impl Default for TrtConfig {
 }
 
 /// TensorRT engine wrapper
+#[allow(dead_code)] // Public API - TensorRT FFI bindings
 pub struct TensorRTEngine {
     config: TrtConfig,
     architecture: GpuArchitecture,
@@ -186,7 +187,7 @@ impl TensorRTEngine {
     }
 
     /// Build engine from ONNX model
-    fn build_from_onnx(&mut self, onnx_path: &str) -> Result<()> {
+    fn build_from_onnx(&mut self, _onnx_path: &str) -> Result<()> {
         // In production, this would:
         // 1. Create TensorRT builder
         // 2. Create network definition
@@ -406,14 +407,14 @@ impl GpuBuffer {
     }
 
     /// Copy from host to device
-    pub fn upload(&mut self, data: &[f32]) -> Result<()> {
-        // cudaMemcpy(device_ptr, data.as_ptr(), size, cudaMemcpyHostToDevice)
+    pub fn upload(&mut self, _data: &[f32]) -> Result<()> {
+        // TODO: cudaMemcpy(device_ptr, data.as_ptr(), size, cudaMemcpyHostToDevice)
         Ok(())
     }
 
     /// Copy from device to host
-    pub fn download(&self, data: &mut [f32]) -> Result<()> {
-        // cudaMemcpy(data.as_mut_ptr(), device_ptr, size, cudaMemcpyDeviceToHost)
+    pub fn download(&self, _data: &mut [f32]) -> Result<()> {
+        // TODO: cudaMemcpy(data.as_mut_ptr(), device_ptr, size, cudaMemcpyDeviceToHost)
         Ok(())
     }
 }

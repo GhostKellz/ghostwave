@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, debug, error};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::config::Config;
 use crate::audio::AudioProcessor;
+use crate::config::Config;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -110,7 +110,10 @@ impl GhostWaveRpc for GhostWaveRpcImpl {
     }
 
     fn register_xlr_device(&self, device_name: String, channels: u8) -> RpcResult<DeviceInfo> {
-        info!("Registering XLR device: {} with {} channels", device_name, channels);
+        info!(
+            "Registering XLR device: {} with {} channels",
+            device_name, channels
+        );
 
         Ok(DeviceInfo {
             id: self.device_id.clone(),
@@ -188,8 +191,8 @@ impl GhostWaveRpc for GhostWaveRpcImpl {
     fn get_levels(&self) -> RpcResult<AudioLevels> {
         // In a real implementation, this would get live audio levels
         Ok(AudioLevels {
-            input_level: -12.0,   // dB
-            output_level: -15.0,  // dB
+            input_level: -12.0,    // dB
+            output_level: -15.0,   // dB
             noise_reduction: 85.0, // %
             gate_active: true,
         })
@@ -234,11 +237,14 @@ impl IpcServer {
         let mut io = IoHandler::new();
         io.extend_with((*self.rpc_impl).clone().to_delegate());
 
-        let server = ServerBuilder::new(io)
-            .start(&format!("ipc://{}", self.socket_path.display()))?;
+        let server =
+            ServerBuilder::new(io).start(&format!("ipc://{}", self.socket_path.display()))?;
 
         info!("🔌 IPC server started at: {:?}", self.socket_path);
-        info!("PhantomLink can now connect via: {}", self.socket_path.display());
+        info!(
+            "PhantomLink can now connect via: {}",
+            self.socket_path.display()
+        );
 
         // Keep the server running
         server.wait();

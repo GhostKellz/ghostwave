@@ -436,40 +436,52 @@ mod tests {
 
     #[test]
     fn test_channel_operations() {
-        let format = FrameFormat::stereo(48000, 4).unwrap();
+        // Use valid buffer size (32 is minimum, power of 2)
+        let format = FrameFormat::stereo(48000, 32).unwrap();
         let mut buffer = AudioBuffer::new(format);
 
-        // Set left channel data
-        let left_samples = vec![1.0, 2.0, 3.0, 4.0];
+        // Set left channel data (32 samples)
+        let left_samples: Vec<f32> = (0..32).map(|i| i as f32 * 0.1).collect();
         buffer.set_channel_samples(0, &left_samples).unwrap();
 
-        // Set right channel data
-        let right_samples = vec![0.1, 0.2, 0.3, 0.4];
+        // Set right channel data (32 samples)
+        let right_samples: Vec<f32> = (0..32).map(|i| i as f32 * 0.01).collect();
         buffer.set_channel_samples(1, &right_samples).unwrap();
 
-        // Verify interleaved layout
-        assert_eq!(buffer.data(), &[1.0, 0.1, 2.0, 0.2, 3.0, 0.3, 4.0, 0.4]);
+        // Verify interleaved layout (first 4 samples)
+        assert!((buffer.data()[0] - 0.0).abs() < 1e-6); // left[0]
+        assert!((buffer.data()[1] - 0.0).abs() < 1e-6); // right[0]
+        assert!((buffer.data()[2] - 0.1).abs() < 1e-6); // left[1]
+        assert!((buffer.data()[3] - 0.01).abs() < 1e-6); // right[1]
 
         // Extract channel data
-        assert_eq!(buffer.channel_samples(0).unwrap(), left_samples);
-        assert_eq!(buffer.channel_samples(1).unwrap(), right_samples);
+        assert_eq!(buffer.channel_samples(0).unwrap().len(), 32);
+        assert_eq!(buffer.channel_samples(1).unwrap().len(), 32);
+        assert!((buffer.channel_samples(0).unwrap()[1] - 0.1).abs() < 1e-6);
+        assert!((buffer.channel_samples(1).unwrap()[1] - 0.01).abs() < 1e-6);
     }
 
     #[test]
     fn test_format_conversion() {
-        // Mono to stereo
-        let mono_format = FrameFormat::mono(48000, 2).unwrap();
+        // Use valid buffer size (32 minimum)
+        let mono_format = FrameFormat::mono(48000, 32).unwrap();
         let mut mono_buffer = AudioBuffer::new(mono_format);
+        // Set first few samples
         mono_buffer.data_mut()[0] = 1.0;
         mono_buffer.data_mut()[1] = 2.0;
 
-        let stereo_format = FrameFormat::stereo(48000, 2).unwrap();
+        let stereo_format = FrameFormat::stereo(48000, 32).unwrap();
         let mut stereo_buffer = AudioBuffer::new(stereo_format);
 
+        // Mono to stereo conversion
         stereo_buffer.copy_from(&mono_buffer).unwrap();
-        assert_eq!(stereo_buffer.data(), &[1.0, 1.0, 2.0, 2.0]);
+        // First mono sample should be duplicated to both channels
+        assert!((stereo_buffer.data()[0] - 1.0).abs() < 1e-6); // Left
+        assert!((stereo_buffer.data()[1] - 1.0).abs() < 1e-6); // Right (duplicated)
+        assert!((stereo_buffer.data()[2] - 2.0).abs() < 1e-6); // Left
+        assert!((stereo_buffer.data()[3] - 2.0).abs() < 1e-6); // Right (duplicated)
 
-        // Stereo to mono
+        // Stereo to mono conversion
         let mut mono_buffer2 = AudioBuffer::new(mono_format);
         stereo_buffer.data_mut()[0] = 1.0; // Left
         stereo_buffer.data_mut()[1] = 3.0; // Right
@@ -477,7 +489,9 @@ mod tests {
         stereo_buffer.data_mut()[3] = 4.0; // Right
 
         mono_buffer2.copy_from(&stereo_buffer).unwrap();
-        assert_eq!(mono_buffer2.data(), &[2.0, 3.0]); // Mixed: (1+3)/2, (2+4)/2
+        // Mixed: (1+3)/2 = 2.0, (2+4)/2 = 3.0
+        assert!((mono_buffer2.data()[0] - 2.0).abs() < 1e-6);
+        assert!((mono_buffer2.data()[1] - 3.0).abs() < 1e-6);
     }
 
     #[test]

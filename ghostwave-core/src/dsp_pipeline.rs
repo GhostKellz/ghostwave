@@ -64,8 +64,6 @@ impl HighPassFilter {
 /// Voice Activity Detector to distinguish speech from background noise
 #[derive(Debug)]
 pub struct VoiceActivityDetector {
-    sample_rate: f32,
-    frame_size: usize,
     energy_threshold: f32,
     zcr_threshold: f32,
     energy_history: VecDeque<f32>,
@@ -78,8 +76,6 @@ pub struct VoiceActivityDetector {
 impl VoiceActivityDetector {
     pub fn new(sample_rate: f32, frame_size: usize) -> Self {
         Self {
-            sample_rate,
-            frame_size,
             energy_threshold: -40.0, // dB
             zcr_threshold: 0.1,
             energy_history: VecDeque::with_capacity(20),
@@ -157,22 +153,16 @@ impl VoiceActivityDetector {
 /// Spectral noise reduction using simple spectral subtraction
 #[derive(Debug)]
 pub struct SpectralDenoiser {
-    sample_rate: f32,
-    frame_size: usize,
     strength: f32,
     noise_estimate: Vec<f32>,
-    alpha: f32, // Noise estimation smoothing factor
     over_subtraction: f32,
 }
 
 impl SpectralDenoiser {
-    pub fn new(sample_rate: f32, frame_size: usize) -> Self {
+    pub fn new(_sample_rate: f32, frame_size: usize) -> Self {
         Self {
-            sample_rate,
-            frame_size,
             strength: 0.7,
             noise_estimate: vec![0.0; frame_size / 2 + 1],
-            alpha: 0.95,
             over_subtraction: 2.0,
         }
     }
@@ -292,7 +282,6 @@ pub struct SoftLimiter {
     makeup_gain: f32,
     lookahead_samples: usize,
     delay_buffer: VecDeque<Sample>,
-    envelope: f32,
 }
 
 impl SoftLimiter {
@@ -306,7 +295,6 @@ impl SoftLimiter {
             makeup_gain: 1.0,
             lookahead_samples,
             delay_buffer: VecDeque::with_capacity(lookahead_samples),
-            envelope: 0.0,
         }
     }
 
@@ -586,7 +574,7 @@ mod tests {
 
         // Test DC removal
         let dc_signal = vec![1.0; 100];
-        let mut filtered: Vec<f32> = dc_signal.iter().map(|&x| hpf.process(x)).collect();
+        let filtered: Vec<f32> = dc_signal.iter().map(|&x| hpf.process(x)).collect();
 
         // After settling, DC should be mostly removed
         let final_average = filtered[50..].iter().sum::<f32>() / 50.0;

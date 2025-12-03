@@ -108,6 +108,7 @@ impl Default for BarkBands {
 }
 
 /// Feature extractor for neural network input
+#[allow(dead_code)] // Public API - feature extraction state
 pub struct FeatureExtractor {
     sample_rate: u32,
     fft_size: usize,
@@ -462,7 +463,7 @@ mod tests {
         // Loud signal
         let loud: Vec<f32> = (0..480).map(|i| (i as f32 * 0.1).sin() * 0.5).collect();
         let loud_energies = vec![0.1; NB_BANDS];
-        let vad = VadFeatures::extract(&loud, &loud_energies);
+        let _vad = VadFeatures::extract(&loud, &loud_energies);
         // This might or might not be detected as voice depending on the signal
     }
 }

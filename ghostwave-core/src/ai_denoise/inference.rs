@@ -19,8 +19,7 @@
 
 use anyhow::Result;
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex};
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug, warn};
 
 /// Inference backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +62,8 @@ impl GpuArchitecture {
             (7, 5) => Self::Turing,
             (8, 0) | (8, 6) | (8, 7) => Self::Ampere,
             (8, 9) => Self::AdaLovelace,
-            (10, _) => Self::Blackwell,
+            // Blackwell: SM 10.0 and 12.0 (RTX 5090 reports compute 12.0)
+            (10, _) | (12, _) => Self::Blackwell,
             (m, _) if m >= 10 => Self::Blackwell,
             (m, _) if m >= 7 => Self::Turing,
             _ => Self::PreTuring,
@@ -149,6 +149,7 @@ impl Default for InferenceConfig {
 }
 
 /// Main inference engine
+#[allow(dead_code)] // Public API - inference engine state
 pub struct InferenceEngine {
     config: InferenceConfig,
     backend: InferenceBackend,
@@ -364,8 +365,8 @@ impl InferenceEngine {
         &self,
         features: &[f32],
         gru_state_1: &mut [f32],
-        gru_state_2: &mut [f32],
-        gru_state_3: &mut [f32],
+        _gru_state_2: &mut [f32], // Reserved for deeper GRU network
+        _gru_state_3: &mut [f32], // Reserved for deeper GRU network
     ) -> Result<Vec<f32>> {
         // Simplified RNNoise network (would load actual weights)
         let nb_bands = 22;
@@ -425,6 +426,7 @@ impl InferenceEngine {
 }
 
 /// CUDA context wrapper
+#[allow(dead_code)] // Public API - CUDA FFI wrapper
 pub struct CudaContext {
     device_index: i32,
     context_handle: *mut c_void,
@@ -468,6 +470,7 @@ unsafe impl Send for CudaContext {}
 unsafe impl Sync for CudaContext {}
 
 /// TensorRT runtime wrapper
+#[allow(dead_code)] // Public API - TensorRT FFI wrapper
 pub struct TensorRTRuntime {
     config: InferenceConfig,
     architecture: GpuArchitecture,
@@ -526,8 +529,8 @@ impl TensorRTRuntime {
         &self,
         features: &[f32],
         gru_state_1: &mut [f32],
-        gru_state_2: &mut [f32],
-        gru_state_3: &mut [f32],
+        _gru_state_2: &mut [f32], // Reserved for deeper GRU network
+        _gru_state_3: &mut [f32], // Reserved for deeper GRU network
     ) -> Result<Vec<f32>> {
         if !self.initialized {
             return Err(anyhow::anyhow!("TensorRT not initialized"));

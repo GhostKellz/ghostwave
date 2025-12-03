@@ -18,10 +18,9 @@
 use anyhow::Result;
 use std::sync::Arc;
 use std::collections::VecDeque;
-use tracing::{debug, info, warn};
+use tracing::info;
 
 use super::inference::InferenceEngine;
-use super::features::{BarkBands, NB_BANDS};
 
 /// Voice isolation mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -116,6 +115,7 @@ impl Default for VoiceIsolationConfig {
 }
 
 /// Voice isolator processor
+#[allow(dead_code)] // Public API - fields used for voice isolation
 pub struct VoiceIsolator {
     config: VoiceIsolationConfig,
     mode: IsolationMode,

@@ -114,7 +114,7 @@ impl GruLayer {
         // Initialize with small random values (Xavier initialization)
         let scale = (2.0 / (input_size + hidden_size) as f32).sqrt();
 
-        let mut init_weights = |size: usize| -> Vec<f32> {
+        let init_weights = |size: usize| -> Vec<f32> {
             (0..size).map(|i| {
                 // Deterministic pseudo-random for reproducibility
                 let x = (i as f32 * 0.618033988749895) % 1.0;
@@ -301,6 +301,7 @@ fn tanh_approx(x: f32) -> f32 {
 }
 
 /// RNNoise processor with real FFT and neural network
+#[allow(dead_code)] // Public API - fields used for introspection
 pub struct RNNoiseProcessor {
     /// Sample rate (should be 48000)
     sample_rate: u32,

@@ -1,12 +1,12 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use jack::{AudioIn, AudioOut, Client, ClientOptions, Control, Port, ProcessScope};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::{info, debug, warn};
+use std::sync::{Arc, Mutex};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::noise_suppression::NoiseProcessor;
 use crate::low_latency::AudioBenchmark;
+use crate::noise_suppression::NoiseProcessor;
 
 pub struct JackModule {
     config: Config,
@@ -47,13 +47,11 @@ impl jack::ProcessHandler for JackProcessor {
         let buffer_size = ps.n_frames() as usize;
 
         // Get input audio
-        let input_slices: Vec<&[f32]> = self.input_ports
-            .iter()
-            .map(|p| p.as_slice(ps))
-            .collect();
+        let input_slices: Vec<&[f32]> = self.input_ports.iter().map(|p| p.as_slice(ps)).collect();
 
         // Get output audio buffers
-        let mut output_slices: Vec<&mut [f32]> = self.output_ports
+        let mut output_slices: Vec<&mut [f32]> = self
+            .output_ports
             .iter_mut()
             .map(|p| p.as_mut_slice(ps))
             .collect();
@@ -96,7 +94,7 @@ impl jack::ProcessHandler for JackProcessor {
 
         // Record performance
         let processing_time = start_time.elapsed();
-        if let Ok(mut benchmark) = self.benchmark.lock() {
+        if let Ok(benchmark) = self.benchmark.lock() {
             benchmark.record_frame_processing(processing_time);
         }
 
@@ -106,8 +104,10 @@ impl jack::ProcessHandler for JackProcessor {
         if self.frame_count % 1000 == 0 {
             if let Ok(benchmark) = self.benchmark.lock() {
                 let stats = benchmark.get_stats();
-                debug!("JACK: {} frames processed, {} XRuns",
-                       stats.total_frames, stats.xrun_count);
+                debug!(
+                    "JACK: {} frames processed, {} XRuns",
+                    stats.total_frames, stats.xrun_count
+                );
             }
         }
 
@@ -119,13 +119,12 @@ impl JackModule {
     pub fn new(config: Config) -> Result<Self> {
         info!("Initializing JACK module for professional audio workflows");
 
-        let processor = Arc::new(Mutex::new(
-            NoiseProcessor::new(&config.noise_suppression)?
-        ));
+        let processor = Arc::new(Mutex::new(NoiseProcessor::new(&config.noise_suppression)?));
 
-        let benchmark = Arc::new(Mutex::new(
-            AudioBenchmark::new(config.audio.sample_rate, config.audio.buffer_size as usize)
-        ));
+        let benchmark = Arc::new(Mutex::new(AudioBenchmark::new(
+            config.audio.sample_rate,
+            config.audio.buffer_size as usize,
+        )));
 
         Ok(Self {
             config,
@@ -152,8 +151,10 @@ impl JackModule {
         // Verify sample rate compatibility
         let jack_sample_rate = client.sample_rate();
         if jack_sample_rate != self.config.audio.sample_rate as usize {
-            warn!("Sample rate mismatch: JACK={}Hz, Config={}Hz",
-                  jack_sample_rate, self.config.audio.sample_rate);
+            warn!(
+                "Sample rate mismatch: JACK={}Hz, Config={}Hz",
+                jack_sample_rate, self.config.audio.sample_rate
+            );
             info!("Using JACK sample rate: {}Hz", jack_sample_rate);
         }
 
@@ -162,7 +163,9 @@ impl JackModule {
     }
 
     pub fn create_ports(&mut self) -> Result<()> {
-        let client = self.client.take()
+        let client = self
+            .client
+            .take()
             .ok_or_else(|| anyhow::anyhow!("JACK client not connected"))?;
 
         info!("Creating JACK audio ports");
@@ -173,7 +176,8 @@ impl JackModule {
         let mut input_ports = Vec::new();
         for i in 0..channels {
             let port_name = format!("input_{}", i + 1);
-            let port = client.register_port(&port_name, AudioIn::default())
+            let port = client
+                .register_port(&port_name, AudioIn::default())
                 .with_context(|| format!("Failed to create input port: {}", port_name))?;
             input_ports.push(port);
             info!("Created input port: {}", port_name);
@@ -183,13 +187,17 @@ impl JackModule {
         let mut output_ports = Vec::new();
         for i in 0..channels {
             let port_name = format!("output_{}", i + 1);
-            let port = client.register_port(&port_name, AudioOut::default())
+            let port = client
+                .register_port(&port_name, AudioOut::default())
                 .with_context(|| format!("Failed to create output port: {}", port_name))?;
             output_ports.push(port);
             info!("Created output port: {}", port_name);
         }
 
-        info!("✅ Created {} input and {} output ports", channels, channels);
+        info!(
+            "✅ Created {} input and {} output ports",
+            channels, channels
+        );
 
         // Create process handler
         let processor = JackProcessor::new(
@@ -200,7 +208,8 @@ impl JackModule {
         );
 
         // Activate client with process handler
-        let active_client = client.activate_async((), processor)
+        let active_client = client
+            .activate_async((), processor)
             .context("Failed to activate JACK client")?;
 
         self.running.store(true, Ordering::SeqCst);
@@ -216,7 +225,9 @@ impl JackModule {
     }
 
     pub fn auto_connect_ports(&self) -> Result<()> {
-        let client = self.client.as_ref()
+        let client = self
+            .client
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("JACK client not connected"))?;
 
         info!("Auto-connecting JACK ports");
@@ -229,11 +240,13 @@ impl JackModule {
         info!("Available output destinations: {}", output_ports.len());
 
         // Auto-connect to system ports if available
-        let system_capture_ports: Vec<_> = input_ports.iter()
+        let system_capture_ports: Vec<_> = input_ports
+            .iter()
             .filter(|name| name.starts_with("system:capture_"))
             .collect();
 
-        let system_playback_ports: Vec<_> = output_ports.iter()
+        let system_playback_ports: Vec<_> = output_ports
+            .iter()
             .filter(|name| name.starts_with("system:playback_"))
             .collect();
 
@@ -273,6 +286,7 @@ impl JackModule {
         }
     }
 
+    #[allow(dead_code)] // Public API for JACK introspection
     pub fn get_jack_info(&self) -> Option<JackInfo> {
         self.client.as_ref().map(|client| JackInfo {
             client_name: client.name().to_string(),
@@ -309,7 +323,9 @@ impl Drop for JackModule {
     }
 }
 
+/// JACK server information
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Public API for JACK introspection
 pub struct JackInfo {
     pub client_name: String,
     pub sample_rate: usize,
@@ -357,7 +373,8 @@ pub async fn run_jack_mode(config: Config) -> Result<()> {
     if !check_jack_availability() {
         return Err(anyhow::anyhow!(
             "JACK server is not running. Start JACK with: jackd -d alsa -r {} -p {}",
-            config.audio.sample_rate, config.audio.buffer_size
+            config.audio.sample_rate,
+            config.audio.buffer_size
         ));
     }
 
@@ -373,13 +390,16 @@ pub async fn run_jack_mode(config: Config) -> Result<()> {
     // Create and configure JACK module
     let mut jack_module = JackModule::new(config)?;
 
-    jack_module.connect_to_jack()
+    jack_module
+        .connect_to_jack()
         .context("Failed to connect to JACK server")?;
 
-    jack_module.create_ports()
+    jack_module
+        .create_ports()
         .context("Failed to create JACK ports")?;
 
-    jack_module.auto_connect_ports()
+    jack_module
+        .auto_connect_ports()
         .context("Failed to auto-connect JACK ports")?;
 
     info!("🎯 JACK module ready - Professional audio processing active");

@@ -2,12 +2,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, debug};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
+use tracing::{debug, info};
 
-use crate::config::Config;
 use crate::audio::AudioProcessor;
-use crate::ipc::{IpcServer, DeviceInfo, GhostWaveRpc};
+use crate::config::Config;
+use crate::ipc::{DeviceInfo, GhostWaveRpc, IpcServer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhantomLinkConfig {
@@ -44,6 +44,7 @@ impl PhantomLinkIntegration {
         }
     }
 
+    #[allow(dead_code)] // Public API for PhantomLink integration
     pub fn with_config(ghostwave_config: Config, phantomlink_config: PhantomLinkConfig) -> Self {
         let ipc_server = Arc::new(IpcServer::new(ghostwave_config.clone()));
         Self {
@@ -57,17 +58,24 @@ impl PhantomLinkIntegration {
         info!("Registering GhostWave as PhantomLink XLR device");
         info!("Device: {}", self.config.device_name);
         info!("Socket: {:?}", self.config.socket_path);
-        info!("Audio: {}Hz, {} channels",
-              self.ghostwave_config.audio.sample_rate, self.ghostwave_config.audio.channels);
+        info!(
+            "Audio: {}Hz, {} channels",
+            self.ghostwave_config.audio.sample_rate, self.ghostwave_config.audio.channels
+        );
 
         // Use the IPC server to register the device
         let rpc_impl = self.ipc_server.get_rpc_impl();
-        let device_info = rpc_impl.register_xlr_device(
-            self.config.device_name.clone(),
-            self.ghostwave_config.audio.channels
-        ).map_err(|e| anyhow::anyhow!("Failed to register XLR device: {:?}", e))?;
+        let device_info = rpc_impl
+            .register_xlr_device(
+                self.config.device_name.clone(),
+                self.ghostwave_config.audio.channels,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to register XLR device: {:?}", e))?;
 
-        info!("✅ Registered as virtual XLR device with ID: {}", device_info.id);
+        info!(
+            "✅ Registered as virtual XLR device with ID: {}",
+            device_info.id
+        );
         Ok(device_info)
     }
 
@@ -78,14 +86,24 @@ impl PhantomLinkIntegration {
         info!("  Output: PhantomLink Virtual XLR → Applications");
 
         info!("Profile optimized for XLR workflow:");
-        info!("  Noise Suppression: {}",
-              if self.ghostwave_config.noise_suppression.enabled { "Enabled" } else { "Disabled" });
+        info!(
+            "  Noise Suppression: {}",
+            if self.ghostwave_config.noise_suppression.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
 
         if self.ghostwave_config.noise_suppression.enabled {
-            info!("  Strength: {:.1}%",
-                  self.ghostwave_config.noise_suppression.strength * 100.0);
-            info!("  Gate Threshold: {:.1} dB",
-                  self.ghostwave_config.noise_suppression.gate_threshold);
+            info!(
+                "  Strength: {:.1}%",
+                self.ghostwave_config.noise_suppression.strength * 100.0
+            );
+            info!(
+                "  Gate Threshold: {:.1} dB",
+                self.ghostwave_config.noise_suppression.gate_threshold
+            );
         }
 
         Ok(())

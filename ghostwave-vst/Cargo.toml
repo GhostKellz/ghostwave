@@ -1,0 +1,27 @@
+[package]
+name = "ghostwave-vst"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "GhostWave VST3/CLAP plugin - NVIDIA Broadcast-style audio processing"
+repository = "https://github.com/ghostkellz/ghostwave"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# NIH-plug for VST3/CLAP plugin development
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+
+# GhostWave core processing
+ghostwave-core = { path = "../ghostwave-core" }
+
+# Common dependencies
+anyhow = "1.0"
+tracing = "0.1"
+
+[features]
+default = []
+# Enable NVIDIA RTX acceleration
+nvidia-rtx = ["ghostwave-core/nvidia-rtx"]

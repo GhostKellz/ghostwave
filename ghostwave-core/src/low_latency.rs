@@ -217,8 +217,6 @@ impl LockFreeAudioBuffer {
 
 /// Real-time audio processing scheduler
 pub struct RealTimeScheduler {
-    target_latency: Duration,
-    buffer_size: usize,
     sample_rate: u32,
     frame_duration: Duration,
 }
@@ -234,8 +232,6 @@ impl RealTimeScheduler {
               sample_rate, buffer_size, target_latency.as_secs_f64() * 1000.0);
 
         Self {
-            target_latency,
-            buffer_size,
             sample_rate,
             frame_duration,
         }
@@ -325,7 +321,6 @@ impl RealTimeScheduler {
 
 /// Performance benchmarking for audio processing
 pub struct AudioBenchmark {
-    processing_times: Vec<Duration>,
     frame_count: AtomicU64,
     xrun_count: AtomicU64,
     max_processing_time: AtomicU64, // in nanoseconds
@@ -342,7 +337,6 @@ impl AudioBenchmark {
               target_frame_time.as_micros());
 
         Self {
-            processing_times: Vec::with_capacity(10000),
             frame_count: AtomicU64::new(0),
             xrun_count: AtomicU64::new(0),
             max_processing_time: AtomicU64::new(0),

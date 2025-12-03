@@ -60,6 +60,14 @@ Complete documentation for GhostWave - NVIDIA RTX Voice for Linux.
   - Hardware configuration
   - Troubleshooting
 
+### Library Integration
+
+- [**Integration Guide**](INTEGRATION.md) - Embedding ghostwave-core in your projects
+  - Quick start examples
+  - Real-time audio processing
+  - PhantomLink JSON-RPC API
+  - Performance optimization patterns
+
 ### External Integration
 
 - [**PhantomLink Integration**](phantomlink-integration.md) - Professional audio mixer
@@ -80,7 +88,7 @@ Complete documentation for GhostWave - NVIDIA RTX Voice for Linux.
 
 - [**NVIDIA RTX Guide**](NVIDIA.md) - RTX GPU acceleration
   - Hardware requirements (RTX 20-50 series)
-  - Driver installation
+  - Driver installation + diagnostics (`ghostwave --doctor`)
   - CUDA setup
   - Performance optimization
 
@@ -259,4 +267,4 @@ GhostWave is licensed under MIT OR Apache-2.0. See [LICENSE](../LICENSE) for det
 
 ---
 
-**Last Updated**: November 2024 (RTX 5090 support added)
+**Last Updated**: December 2025 (v0.2.0 - RTX 5090 Blackwell support)

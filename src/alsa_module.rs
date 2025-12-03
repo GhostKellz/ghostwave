@@ -1,14 +1,14 @@
-use anyhow::{Result, Context};
-use alsa::pcm::{PCM, HwParams, Format, Access, State};
+use alsa::pcm::{Access, Format, HwParams, PCM, State};
 use alsa::{Direction, ValueOr};
+use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
-use tracing::{info, debug, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::low_latency::{AudioBenchmark, RealTimeScheduler};
 use crate::noise_suppression::NoiseProcessor;
-use crate::low_latency::{RealTimeScheduler, AudioBenchmark};
 
 pub struct AlsaModule {
     config: Config,
@@ -23,14 +23,14 @@ impl AlsaModule {
     pub fn new(config: Config) -> Result<Self> {
         info!("Initializing ALSA direct integration module");
 
-        let processor = Arc::new(Mutex::new(
-            NoiseProcessor::new(&config.noise_suppression)?
-        ));
+        let processor = Arc::new(Mutex::new(NoiseProcessor::new(&config.noise_suppression)?));
 
-        let scheduler = RealTimeScheduler::new(config.audio.sample_rate, config.audio.buffer_size as usize);
-        let benchmark = Arc::new(Mutex::new(
-            AudioBenchmark::new(config.audio.sample_rate, config.audio.buffer_size as usize)
-        ));
+        let scheduler =
+            RealTimeScheduler::new(config.audio.sample_rate, config.audio.buffer_size as usize);
+        let benchmark = Arc::new(Mutex::new(AudioBenchmark::new(
+            config.audio.sample_rate,
+            config.audio.buffer_size as usize,
+        )));
 
         Ok(Self {
             config,
@@ -87,21 +87,33 @@ impl AlsaModule {
         info!("Opening ALSA audio devices");
 
         // Determine device names
-        let input_device = self.config.audio.input_device.as_deref()
+        let input_device = self
+            .config
+            .audio
+            .input_device
+            .as_deref()
             .unwrap_or("default");
-        let output_device = self.config.audio.output_device.as_deref()
+        let output_device = self
+            .config
+            .audio
+            .output_device
+            .as_deref()
             .unwrap_or("default");
 
         info!("Input device: {}", input_device);
         info!("Output device: {}", output_device);
 
         // Open input device
-        self.pcm_in = Some(PCM::new(input_device, Direction::Capture, false)
-            .with_context(|| format!("Failed to open ALSA input device: {}", input_device))?);
+        self.pcm_in = Some(
+            PCM::new(input_device, Direction::Capture, false)
+                .with_context(|| format!("Failed to open ALSA input device: {}", input_device))?,
+        );
 
         // Open output device
-        self.pcm_out = Some(PCM::new(output_device, Direction::Playback, false)
-            .with_context(|| format!("Failed to open ALSA output device: {}", output_device))?);
+        self.pcm_out = Some(
+            PCM::new(output_device, Direction::Playback, false)
+                .with_context(|| format!("Failed to open ALSA output device: {}", output_device))?,
+        );
 
         info!("✅ ALSA devices opened successfully");
         Ok(())
@@ -164,9 +176,13 @@ impl AlsaModule {
     pub fn start_audio_processing(&mut self) -> Result<()> {
         info!("Starting ALSA audio processing");
 
-        let pcm_in = self.pcm_in.as_ref()
+        let pcm_in = self
+            .pcm_in
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Input PCM not initialized"))?;
-        let pcm_out = self.pcm_out.as_ref()
+        let pcm_out = self
+            .pcm_out
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Output PCM not initialized"))?;
 
         // Prepare devices
@@ -189,20 +205,18 @@ impl AlsaModule {
 
             // Read from input
             match pcm_in.io_f32() {
-                Ok(io) => {
-                    match io.readi(&mut input_buffer) {
-                        Ok(frames_read) => {
-                            if frames_read != buffer_size as usize {
-                                debug!("Partial read: {} frames", frames_read);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("ALSA input error: {}", e);
-                            pcm_in.try_recover(e, false)?;
-                            continue;
+                Ok(io) => match io.readi(&mut input_buffer) {
+                    Ok(frames_read) => {
+                        if frames_read != buffer_size as usize {
+                            debug!("Partial read: {} frames", frames_read);
                         }
                     }
-                }
+                    Err(e) => {
+                        warn!("ALSA input error: {}", e);
+                        pcm_in.try_recover(e, false)?;
+                        continue;
+                    }
+                },
                 Err(e) => {
                     error!("Failed to get input IO: {}", e);
                     break;
@@ -221,20 +235,18 @@ impl AlsaModule {
 
             // Write to output
             match pcm_out.io_f32() {
-                Ok(io) => {
-                    match io.writei(&output_buffer) {
-                        Ok(frames_written) => {
-                            if frames_written != buffer_size as usize {
-                                debug!("Partial write: {} frames", frames_written);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("ALSA output error: {}", e);
-                            pcm_out.try_recover(e, false)?;
-                            continue;
+                Ok(io) => match io.writei(&output_buffer) {
+                    Ok(frames_written) => {
+                        if frames_written != buffer_size as usize {
+                            debug!("Partial write: {} frames", frames_written);
                         }
                     }
-                }
+                    Err(e) => {
+                        warn!("ALSA output error: {}", e);
+                        pcm_out.try_recover(e, false)?;
+                        continue;
+                    }
+                },
                 Err(e) => {
                     error!("Failed to get output IO: {}", e);
                     break;
@@ -243,7 +255,7 @@ impl AlsaModule {
 
             // Record performance
             let processing_time = frame_start.elapsed();
-            if let Ok(mut benchmark) = self.benchmark.lock() {
+            if let Ok(benchmark) = self.benchmark.lock() {
                 benchmark.record_frame_processing(processing_time);
             }
 
@@ -253,8 +265,10 @@ impl AlsaModule {
             if frame_count % 1000 == 0 {
                 if let Ok(benchmark) = self.benchmark.lock() {
                     let stats = benchmark.get_stats();
-                    debug!("ALSA: {} frames processed, {} XRuns",
-                           stats.total_frames, stats.xrun_count);
+                    debug!(
+                        "ALSA: {} frames processed, {} XRuns",
+                        stats.total_frames, stats.xrun_count
+                    );
                 }
             }
 
@@ -320,6 +334,7 @@ pub fn check_alsa_availability() -> bool {
 }
 
 /// Auto-detect the best ALSA device for the given config
+#[allow(dead_code)] // Public API for external use
 pub fn auto_detect_alsa_device(config: &Config) -> Result<Option<String>> {
     let alsa_module = AlsaModule::new(config.clone())?;
     let devices = alsa_module.detect_alsa_devices()?;
@@ -359,10 +374,12 @@ pub async fn run_alsa_mode(config: Config) -> Result<()> {
 
     // Detect and open devices
     alsa_module.detect_alsa_devices()?;
-    alsa_module.open_devices()
+    alsa_module
+        .open_devices()
         .context("Failed to open ALSA devices")?;
 
-    alsa_module.setup_hardware_params()
+    alsa_module
+        .setup_hardware_params()
         .context("Failed to configure ALSA hardware parameters")?;
 
     info!("🎯 ALSA module ready - Direct hardware access active");

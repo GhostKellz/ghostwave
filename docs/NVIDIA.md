@@ -210,6 +210,18 @@ Expected output:
    RTX Voice: Supported
 ```
 
+### RTX Diagnostics (v0.2.0+)
+
+`ghostwave --doctor` now pipelines the shared `check_rtx_system_requirements()` report so you can verify readiness even if the binary was compiled without `--features nvidia-rtx`:
+
+- **Driver / CUDA / TensorRT readiness** – booleans indicate whether each dependency was detected on PATH/LD
+a
+- **FP4 readiness + Tensor Core generation** – highlights if RTX 50 "Blackwell" FP4 kernels can engage
+- **GPU inventory** – model name, compute capability, VRAM in GiB, and detected architecture generation
+- **Processing mode probe** – attempts to build an `RtxAccelerator` and reports the selected GPU/CPU path
+
+This output makes it clear whether you need to install additional drivers, upgrade CUDA, or simply rebuild with the `nvidia-rtx` feature flag before running GPU benchmarks.
+
 ---
 
 ## CUDA Setup

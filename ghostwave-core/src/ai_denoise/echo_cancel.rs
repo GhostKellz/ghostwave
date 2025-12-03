@@ -93,6 +93,7 @@ impl FilterBlock {
 }
 
 /// Frequency-domain Acoustic Echo Canceller
+#[allow(dead_code)] // Public API - fields used in AEC processing
 pub struct AcousticEchoCanceller {
     config: AecConfig,
 
@@ -351,7 +352,7 @@ impl AcousticEchoCanceller {
 
     /// Update reference signal blocks in frequency domain
     fn update_reference_blocks(&mut self) -> Result<()> {
-        let frame_size = self.config.frame_size;
+        let _frame_size = self.config.frame_size; // Reserved for frame-based processing
 
         // Shift filter blocks (move reference history forward)
         for i in (1..self.num_blocks).rev() {

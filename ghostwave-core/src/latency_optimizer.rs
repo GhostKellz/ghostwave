@@ -4,7 +4,7 @@
 //! with support for both standard (48kHz/128f) and studio (96kHz/256f) configurations.
 
 use anyhow::Result;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{info, warn, debug};
@@ -95,6 +95,7 @@ impl LatencyConfig {
 /// Real-time priority manager with graceful fallback
 pub struct RtPriorityManager {
     priority_set: AtomicBool,
+    #[allow(dead_code)] // Reserved for priority restoration on drop
     original_priority: i32,
 }
 
@@ -110,13 +111,13 @@ impl RtPriorityManager {
     pub fn set_realtime_priority(&self, priority: i32) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
-            use libc::{sched_param, sched_setscheduler, SCHED_FIFO, SCHED_OTHER};
+            use libc::{sched_param, sched_setscheduler, SCHED_FIFO};
             use std::mem;
 
             unsafe {
                 // Save original priority
                 let mut original_param: sched_param = mem::zeroed();
-                let original_policy = libc::sched_getscheduler(0);
+                let _original_policy = libc::sched_getscheduler(0);
                 libc::sched_getparam(0, &mut original_param);
 
                 // Try to set FIFO real-time priority

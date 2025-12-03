@@ -1,13 +1,13 @@
-# Maintainer: GhostWave Project
+# Maintainer: Christopher Kelley <ckelley@ghostkellz.sh>
 pkgname=ghostwave-core
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="GhostWave DSP Core Library - Real-time audio processing components"
 arch=('x86_64')
 url="https://github.com/ghostkellz/ghostwave"
-license=('MIT OR Apache-2.0')
+license=('MIT' 'Apache-2.0')
 depends=('pipewire' 'alsa-lib' 'jack2')
-makedepends=('rust' 'cargo')
+makedepends=('rust' 'cargo' 'clang' 'llvm')
 optdepends=(
     'nvidia-utils: for RTX acceleration'
     'cuda: for GPU acceleration'
@@ -21,7 +21,6 @@ options=('!lto')
 build() {
     cd "ghostwave-$pkgver/ghostwave-core"
 
-    # Build with optimizations
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
 
@@ -37,12 +36,9 @@ check() {
 package() {
     cd "ghostwave-$pkgver/ghostwave-core"
 
-    # Install library (this would be for static linking or development)
+    # Install library artifacts
     install -dm755 "$pkgdir/usr/lib"
     install -dm755 "$pkgdir/usr/include/ghostwave"
-
-    # Install header files for C FFI (if implemented)
-    # install -Dm644 include/*.h "$pkgdir/usr/include/ghostwave/"
 
     # Install pkg-config file
     install -dm755 "$pkgdir/usr/lib/pkgconfig"
@@ -59,10 +55,9 @@ Libs: -L\${libdir} -lghostwave_core
 Cflags: -I\${includedir}
 EOF
 
-    # Install documentation
-    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md" || true
-
     # Install license
-    install -Dm644 ../LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT" || true
-    install -Dm644 ../LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE" || true
+    install -Dm644 ../LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 ../LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 }
+
+# vim:set ts=4 sw=4 et:

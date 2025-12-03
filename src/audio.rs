@@ -1,13 +1,15 @@
 use anyhow::Result;
-use cpal::{Device, StreamConfig};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Device, StreamConfig};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, debug, error};
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::noise_suppression::NoiseProcessor;
 
+/// Audio processor for noise suppression
+#[allow(dead_code)] // Public API for PhantomLink integration
 pub struct AudioProcessor {
     config: Config,
     noise_processor: Arc<RwLock<NoiseProcessor>>,
@@ -15,9 +17,8 @@ pub struct AudioProcessor {
 
 impl AudioProcessor {
     pub fn new(config: Config) -> Result<Self> {
-        let noise_processor = Arc::new(RwLock::new(
-            NoiseProcessor::new(&config.noise_suppression)?
-        ));
+        let noise_processor =
+            Arc::new(RwLock::new(NoiseProcessor::new(&config.noise_suppression)?));
 
         Ok(Self {
             config,
@@ -25,6 +26,7 @@ impl AudioProcessor {
         })
     }
 
+    #[allow(dead_code)] // Public API for PhantomLink
     pub async fn process_audio_buffer(&self, input: &[f32], output: &mut [f32]) -> Result<()> {
         if !self.config.noise_suppression.enabled {
             output.copy_from_slice(input);

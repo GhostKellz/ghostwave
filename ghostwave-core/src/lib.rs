@@ -17,26 +17,25 @@
 //!
 //! ## Example Usage
 //!
-//! ```rust
-//! use ghostwave_core::{GhostWaveProcessor, Config, NoiseSuppressionConfig};
+//! ```rust,no_run
+//! use ghostwave_core::{GhostWaveProcessor, Config};
 //!
-//! // Create configuration
-//! let config = Config::default()
-//!     .with_sample_rate(48000)
-//!     .with_buffer_size(256)
-//!     .with_noise_suppression(NoiseSuppressionConfig::default());
+//! // Create configuration (balanced preset)
+//! let config = Config::default();
 //!
 //! // Create processor
-//! let mut processor = GhostWaveProcessor::new(config)?;
+//! let processor = GhostWaveProcessor::new(config).expect("Failed to create processor");
 //!
 //! // Process audio
 //! let input = vec![0.1f32; 256];
 //! let mut output = vec![0.0f32; 256];
-//! processor.process(&input, &mut output)?;
+//! processor.process(&input, &mut output).expect("Processing failed");
 //! ```
 
 pub mod config;
 pub mod config_v2;
+pub mod error;
+pub mod ffi;
 pub mod processor;
 pub mod frame_format;
 pub mod dsp_pipeline;
@@ -46,6 +45,7 @@ pub mod low_latency;
 pub mod device_detection;
 pub mod device_manager;
 pub mod structured_logging;
+pub mod telemetry;
 pub mod pipewire_integration;
 pub mod ipc_server;
 pub mod simd_acceleration;
@@ -54,6 +54,11 @@ pub mod rtx_denoising;
 
 // AI-powered denoising (NVIDIA Broadcast / Krisp parity)
 pub mod ai_denoise;
+
+// Professional DSP modules for VST/Plugin integration
+pub mod de_esser;
+pub mod parametric_eq;
+pub mod compressor;
 
 #[cfg(feature = "nvidia-rtx")]
 pub mod rtx_acceleration;
@@ -82,9 +87,35 @@ pub use noise_suppression::NoiseProcessor;
 pub use low_latency::{LockFreeAudioBuffer, RealTimeScheduler, AudioBenchmark, TARGET_LATENCY_MS};
 pub use device_detection::{DeviceDetector, AudioDevice, AudioDeviceType};
 pub use device_manager::{DeviceManager, DeviceManagerBuilder, DeviceSelectionConfig, HotplugEvent};
+pub use telemetry::{TelemetryCollector, TelemetrySnapshot, PerformanceMetrics, GpuMetrics, AudioMetrics, init_telemetry, telemetry};
+pub use error::{GhostWaveError, Result as GhostWaveResult, CError};
+pub use ffi::*;
+
+// PipeWire integration re-exports
+pub use pipewire_integration::{
+    PipeWireConfig, PipeWireIntegration, ProcessingMode,
+    NodeProperties, StreamConfig, StreamState, StreamStats,
+    AudioFormat, AudioStream, DeviceManager as PipeWireDeviceManager,
+    AudioDeviceInfo, DeviceEvent,
+};
+
+// Professional DSP re-exports
+pub use de_esser::{DeEsser, DeEsserConfig};
+pub use parametric_eq::{ParametricEq, ParametricEqConfig, EqBandConfig, FilterType};
+pub use compressor::{Compressor, CompressorConfig, DetectionMode, KneeType};
 
 #[cfg(feature = "nvidia-rtx")]
-pub use rtx_acceleration::{RtxAccelerator, RtxCapabilities};
+pub use rtx_acceleration::{RtxAccelerator, RtxCapabilities, GpuProcessingStatus};
+
+// Provide GpuProcessingStatus when nvidia-rtx is not compiled
+#[cfg(not(feature = "nvidia-rtx"))]
+#[derive(Debug, Clone, Default)]
+pub struct GpuProcessingStatus {
+    pub gpu_active: bool,
+    pub fallback_active: bool,
+    pub fallback_count: u64,
+    pub fallback_reason: Option<String>,
+}
 
 /// Main GhostWave audio processor
 pub struct GhostWaveProcessor {

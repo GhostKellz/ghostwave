@@ -116,11 +116,27 @@ impl NoiseProcessor {
             false
         }
     }
+
+    /// Set noise suppression strength (0.0 to 1.0)
+    pub fn set_strength(&mut self, strength: f32) {
+        self.config.strength = strength.clamp(0.0, 1.0);
+        self.spectral_filter.set_strength(self.config.strength);
+    }
+
+    /// Set gate threshold in dB (-80 to 0)
+    pub fn set_gate_threshold(&mut self, threshold_db: f32) {
+        self.config.gate_threshold = threshold_db.clamp(-80.0, 0.0);
+        self.gate.set_threshold(self.config.gate_threshold);
+    }
+
+    /// Enable or disable processing
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.config.enabled = enabled;
+    }
 }
 
 struct NoiseGate {
     threshold: f32,
-    release_time: f32,
     envelope: f32,
     attack_coeff: f32,
     release_coeff: f32,
@@ -134,7 +150,6 @@ impl NoiseGate {
 
         Self {
             threshold,
-            release_time,
             envelope: 0.0,
             attack_coeff: (-1.0_f32 / (attack_time * sample_rate)).exp(),
             release_coeff: (-1.0_f32 / (release_time * sample_rate)).exp(),
@@ -160,48 +175,29 @@ impl NoiseGate {
             output[i] = sample * gate_factor;
         }
     }
+
+    fn set_threshold(&mut self, threshold_db: f32) {
+        self.threshold = 10.0_f32.powf(threshold_db / 20.0);
+    }
 }
 
 struct SpectralFilter {
     strength: f32,
-    frame_size: usize,
-    hop_size: usize,
-    window: Vec<f32>,
-    noise_profile: Vec<f32>,
-    adaptation_rate: f32,
 }
 
 impl SpectralFilter {
     fn new(strength: f32) -> Self {
-        let frame_size = 1024;
-        let hop_size = frame_size / 4;
-        let window = Self::hanning_window(frame_size);
-
-        Self {
-            strength,
-            frame_size,
-            hop_size,
-            window,
-            noise_profile: vec![0.0; frame_size / 2 + 1],
-            adaptation_rate: 0.95,
-        }
+        Self { strength }
     }
 
     fn process(&self, input: &[f32], output: &mut [f32]) {
-        output.copy_from_slice(input);
-
-        for i in 0..input.len() {
-            let filtered = input[i] * (1.0 - self.strength * 0.5);
-            output[i] = filtered;
+        // Simple gain reduction based on strength
+        for (i, &sample) in input.iter().enumerate() {
+            output[i] = sample * (1.0 - self.strength * 0.5);
         }
     }
 
-    fn hanning_window(size: usize) -> Vec<f32> {
-        (0..size)
-            .map(|i| {
-                let phase = 2.0 * std::f32::consts::PI * i as f32 / (size - 1) as f32;
-                0.5 * (1.0 - phase.cos())
-            })
-            .collect()
+    fn set_strength(&mut self, strength: f32) {
+        self.strength = strength;
     }
 }

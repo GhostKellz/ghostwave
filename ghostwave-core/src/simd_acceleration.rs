@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use std::arch::x86_64::*;
-use tracing::{info, debug, warn};
+use tracing::{info, warn};
 
 /// CPU feature detection and SIMD capabilities
 #[derive(Debug, Clone)]

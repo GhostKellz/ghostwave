@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -54,8 +54,7 @@ impl Config {
                 let config_path = Self::config_path(profile_name)?;
                 let content = std::fs::read_to_string(&config_path)
                     .with_context(|| format!("Failed to read config from {:?}", config_path))?;
-                serde_json::from_str(&content)
-                    .with_context(|| "Failed to parse config JSON")?
+                serde_json::from_str(&content).with_context(|| "Failed to parse config JSON")?
             }
         };
 
@@ -84,10 +83,10 @@ impl Config {
     pub fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read config from {:?}", path.as_ref()))?;
-        serde_json::from_str(&content)
-            .with_context(|| "Failed to parse config JSON")
+        serde_json::from_str(&content).with_context(|| "Failed to parse config JSON")
     }
 
+    #[allow(dead_code)] // Public API for CLI overrides
     pub fn with_overrides(mut self, sample_rate: Option<u32>, frames: Option<u32>) -> Self {
         if let Some(rate) = sample_rate {
             self.audio.sample_rate = rate;
@@ -99,8 +98,7 @@ impl Config {
     }
 
     fn config_path(profile_name: &str) -> Result<PathBuf> {
-        let mut path = dirs::config_dir()
-            .context("Failed to get config directory")?;
+        let mut path = dirs::config_dir().context("Failed to get config directory")?;
         path.push("ghostwave");
         path.push(format!("{}.json", profile_name));
         Ok(path)

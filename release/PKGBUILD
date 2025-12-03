@@ -1,0 +1,98 @@
+# Maintainer: Christopher Kelley <ckelley@ghostkellz.sh>
+pkgname=ghostwave
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="NVIDIA RTX Voice-style AI noise suppression for Linux"
+arch=('x86_64')
+url="https://github.com/ghostkellz/ghostwave"
+license=('MIT' 'Apache-2.0')
+depends=(
+    'pipewire'
+    'pipewire-pulse'
+    'wireplumber'
+    'pipewire-jack'
+    'alsa-lib'
+    'jack2'
+)
+optdepends=(
+    'nvidia-open: NVIDIA open kernel modules for RTX acceleration'
+    'cuda: NVIDIA CUDA runtime for GPU acceleration'
+    'nvidia-utils: NVIDIA driver utilities'
+    'phantomlink: Professional mixing integration'
+    'nvcontrol: NVIDIA GPU management'
+)
+makedepends=(
+    'rust'
+    'cargo'
+    'clang'
+    'llvm'
+    'pipewire'
+    'jack2'
+    'alsa-lib'
+)
+provides=('ghostwave')
+conflicts=('ghostwave-git')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/ghostkellz/$pkgname/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+
+    # Build with all audio backends + RTX
+    cargo build --release --locked \
+        --features "nvidia-rtx"
+
+    # Generate shell completions
+    mkdir -p completions
+    ./target/release/ghostwave --generate-completion bash > completions/ghostwave.bash
+    ./target/release/ghostwave --generate-completion zsh > completions/_ghostwave
+    ./target/release/ghostwave --generate-completion fish > completions/ghostwave.fish
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # Binary
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+    # Systemd user service
+    install -Dm644 "systemd/ghostwave.service" \
+        "$pkgdir/usr/lib/systemd/user/ghostwave.service"
+
+    # Configuration
+    install -dm755 "$pkgdir/etc/ghostwave"
+    install -Dm644 "examples/config.toml" "$pkgdir/etc/ghostwave/config.toml.example"
+
+    # Documentation
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 "docs/phantomlink-integration.md" "$pkgdir/usr/share/doc/$pkgname/phantomlink-integration.md"
+    install -Dm644 "docs/nvcontrol-integration.md" "$pkgdir/usr/share/doc/$pkgname/nvcontrol-integration.md"
+    install -Dm644 "docs/PIPEWIRE.md" "$pkgdir/usr/share/doc/$pkgname/PIPEWIRE.md"
+    install -Dm644 "docs/ALSA.md" "$pkgdir/usr/share/doc/$pkgname/ALSA.md"
+
+    # License
+    install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 "LICENSE-APACHE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+
+    # Shell completions
+    install -Dm644 completions/ghostwave.bash "$pkgdir/usr/share/bash-completion/completions/ghostwave"
+    install -Dm644 completions/_ghostwave "$pkgdir/usr/share/zsh/site-functions/_ghostwave"
+    install -Dm644 completions/ghostwave.fish "$pkgdir/usr/share/fish/vendor_completions.d/ghostwave.fish"
+}
+
+# vim:set ts=4 sw=4 et:

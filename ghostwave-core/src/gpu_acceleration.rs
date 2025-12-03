@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn, debug};
+use tracing::{info, warn};
 
 /// GPU acceleration backend types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,8 +158,9 @@ impl GpuCapabilities {
                     let memory_gb = memory_mb / 1024.0;
 
                     // Detect compute capability based on GPU name
+                    // RTX 5090 actually reports compute 12.0 (not 10.0)
                     let compute_capability = if name.contains("RTX 50") || name.contains("5090") || name.contains("5080") {
-                        (10, 0) // Blackwell
+                        (12, 0) // Blackwell (RTX 5090 reports 12.0)
                     } else if name.contains("RTX 40") || name.contains("4090") || name.contains("4080") {
                         (8, 9) // Ada Lovelace
                     } else if name.contains("RTX 30") || name.contains("3090") || name.contains("3080") {
@@ -250,24 +251,31 @@ impl GpuCapabilities {
     }
 
     #[cfg(not(feature = "cuda-tensorrt"))]
+    #[allow(dead_code)] // Stub when CUDA feature disabled
     fn detect_cuda() -> bool { false }
 
     #[cfg(not(feature = "cuda-tensorrt"))]
+    #[allow(dead_code)]
     fn detect_tensorrt() -> bool { false }
 
     #[cfg(not(feature = "cuda-tensorrt"))]
+    #[allow(dead_code)]
     fn detect_cuda_devices() -> Vec<GpuDeviceInfo> { vec![] }
 
     #[cfg(not(feature = "vulkan-compute"))]
+    #[allow(dead_code)] // Stub when Vulkan feature disabled
     fn detect_vulkan() -> bool { false }
 
     #[cfg(not(feature = "vulkan-compute"))]
+    #[allow(dead_code)]
     fn detect_vulkan_devices() -> Vec<GpuDeviceInfo> { vec![] }
 
     #[cfg(not(feature = "opencl"))]
+    #[allow(dead_code)] // Stub when OpenCL feature disabled
     fn detect_opencl() -> bool { false }
 
     #[cfg(not(feature = "opencl"))]
+    #[allow(dead_code)]
     fn detect_opencl_devices() -> Vec<GpuDeviceInfo> { vec![] }
 
     fn get_recommended_backend(&self) -> Option<GpuBackend> {
@@ -602,6 +610,7 @@ impl GpuAcceleratorFactory {
 
     /// Create accelerator for specific backend
     pub fn create_for_backend(backend: GpuBackend) -> Result<Box<dyn GpuAccelerator>> {
+        #[allow(unused_variables)] // caps used conditionally with feature flags
         let caps = GpuCapabilities::detect();
 
         match backend {

@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,14 +11,12 @@ impl SystemdService {
         info!("Installing systemd user service");
 
         let service_dir = Self::systemd_user_dir()?;
-        fs::create_dir_all(&service_dir)
-            .context("Failed to create systemd user directory")?;
+        fs::create_dir_all(&service_dir).context("Failed to create systemd user directory")?;
 
         let service_content = Self::generate_service_file()?;
         let service_path = service_dir.join("ghostwave.service");
 
-        fs::write(&service_path, &service_content)
-            .context("Failed to write service file")?;
+        fs::write(&service_path, &service_content).context("Failed to write service file")?;
 
         info!("Created systemd service: {:?}", service_path);
 
@@ -41,8 +39,7 @@ impl SystemdService {
 
         let service_path = Self::systemd_user_dir()?.join("ghostwave.service");
         if service_path.exists() {
-            fs::remove_file(&service_path)
-                .context("Failed to remove service file")?;
+            fs::remove_file(&service_path).context("Failed to remove service file")?;
             info!("Removed: {:?}", service_path);
         }
 
@@ -68,8 +65,7 @@ impl SystemdService {
     }
 
     fn systemd_user_dir() -> Result<PathBuf> {
-        let mut config_dir = dirs::config_dir()
-            .context("Failed to get config directory")?;
+        let mut config_dir = dirs::config_dir().context("Failed to get config directory")?;
         config_dir.push("systemd");
         config_dir.push("user");
         Ok(config_dir)
@@ -78,7 +74,8 @@ impl SystemdService {
     fn generate_service_file() -> Result<String> {
         let ghostwave_binary = Self::find_ghostwave_binary()?;
 
-        Ok(format!(r#"[Unit]
+        Ok(format!(
+            r#"[Unit]
 Description=GhostWave - NVIDIA RTX Voice for Linux
 Documentation=https://github.com/ghostkellz/ghostwave
 After=pipewire.service
@@ -104,7 +101,9 @@ LockPersonality=yes
 
 [Install]
 WantedBy=default.target
-"#, ghostwave_binary))
+"#,
+            ghostwave_binary
+        ))
     }
 
     fn find_ghostwave_binary() -> Result<String> {

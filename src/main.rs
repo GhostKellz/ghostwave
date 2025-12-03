@@ -1,7 +1,8 @@
+use crate::rtx_acceleration::{RtxAccelerator, check_rtx_system_requirements};
 use anyhow::Result;
 use clap::Parser;
+use ghostwave_core::latency_optimizer::{LatencyConfig, LatencyOptimizer};
 use tracing::{info, warn};
-use ghostwave_core::latency_optimizer::{LatencyOptimizer, LatencyConfig};
 
 mod alsa_module;
 mod audio;
@@ -144,10 +145,6 @@ struct Args {
     #[arg(long)]
     passthrough: bool,
 
-    /// Show version information and exit
-    #[arg(long)]
-    version: bool,
-
     /// List available profiles
     #[arg(long)]
     list_profiles: bool,
@@ -159,6 +156,33 @@ struct Args {
     /// Generate shell completion script
     #[arg(long)]
     generate_completion: Option<String>,
+
+    /// PipeWire processing mode: low-latency, balanced, high-quality
+    /// low-latency: 10ms chunks (Discord/gaming, like NVIDIA Broadcast)
+    /// balanced: 20ms chunks (general use)
+    /// high-quality: 50ms chunks (recording/podcasting)
+    #[arg(long, value_name = "MODE")]
+    processing_mode: Option<String>,
+
+    /// PipeWire preset: gaming, recording, rtx50
+    /// gaming: Low-latency for Discord/streaming
+    /// recording: High-quality stereo for podcasting
+    /// rtx50: Optimized for RTX 50 series (Blackwell)
+    #[arg(long, value_name = "PRESET")]
+    pipewire_preset: Option<String>,
+
+    /// Noise reduction strength (0.0-1.0)
+    #[arg(long, value_name = "STRENGTH")]
+    noise_strength: Option<f32>,
+
+    /// Enable voice isolation (isolate primary speaker)
+    #[arg(long)]
+    voice_isolation: bool,
+
+    /// Auto-link PipeWire nodes to default sink/source
+    /// Uses pw-link to connect ghostwave_input/ghostwave_output automatically
+    #[arg(long)]
+    auto_link: bool,
 }
 
 #[tokio::main]
@@ -166,17 +190,21 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Handle special commands first
-    if args.version {
-        println!("GhostWave {}", env!("CARGO_PKG_VERSION"));
-        println!("Linux RTX Voice Alternative");
-        return Ok(());
-    }
-
     if args.list_profiles {
         println!("Available processing profiles:");
         println!("  balanced   - Balanced noise reduction for everyday use");
         println!("  streaming  - Aggressive noise reduction for streaming");
         println!("  studio     - Minimal processing for professional recording");
+        println!();
+        println!("PipeWire processing modes (--processing-mode):");
+        println!("  low-latency  - 10ms chunks, Discord/gaming (NVIDIA Broadcast style)");
+        println!("  balanced     - 20ms chunks, general use");
+        println!("  high-quality - 50ms chunks, recording/podcasting");
+        println!();
+        println!("PipeWire presets (--pipewire-preset):");
+        println!("  gaming    - Low-latency for Discord/streaming");
+        println!("  recording - High-quality stereo for podcasting");
+        println!("  rtx50     - Optimized for RTX 50 series (Blackwell, 5th gen Tensor Cores)");
         return Ok(());
     }
 
@@ -188,7 +216,10 @@ async fn main() -> Result<()> {
         for device in devices {
             println!("  • {} {} ({})", device.vendor, device.model, device.name);
             if device.is_xlr_interface {
-                println!("    ✅ XLR Interface - Profile: {}", device.recommended_profile);
+                println!(
+                    "    ✅ XLR Interface - Profile: {}",
+                    device.recommended_profile
+                );
             }
         }
         return Ok(());
@@ -242,7 +273,58 @@ async fn main() -> Result<()> {
 
     if args.doctor {
         info!("🩺 GhostWave System Diagnostics");
-        rtx_acceleration::check_rtx_system_requirements()?;
+
+        // RTX system requirements check (works with or without nvidia-rtx feature)
+        match check_rtx_system_requirements() {
+            Ok(sys_info) => {
+                info!(
+                    "RTX GPU: {}",
+                    sys_info.gpu_name.as_deref().unwrap_or("Not detected")
+                );
+                info!(
+                    "Driver: {}",
+                    sys_info.driver_version.as_deref().unwrap_or("Unknown")
+                );
+                info!(
+                    "CUDA: {}",
+                    sys_info.cuda_version.as_deref().unwrap_or("Not detected")
+                );
+                info!(
+                    "TensorRT: {}",
+                    sys_info
+                        .tensorrt_version
+                        .as_deref()
+                        .unwrap_or("Not detected")
+                );
+                info!(
+                    "Readiness -> Driver: {}, CUDA: {}, TensorRT: {}, FP4: {}",
+                    sys_info.readiness.driver_ok,
+                    sys_info.readiness.cuda_ok,
+                    sys_info.readiness.tensorrt_ok,
+                    sys_info.readiness.fp4_ready
+                );
+                if sys_info.compute_capability.0 > 0 {
+                    info!(
+                        "Compute: {}.{} (Gen {:?}, Tensor Core Gen {})",
+                        sys_info.compute_capability.0,
+                        sys_info.compute_capability.1,
+                        sys_info.gpu_generation,
+                        sys_info.tensor_core_gen
+                    );
+                    info!("Memory: {:.1} GB", sys_info.memory_gb);
+                }
+
+                #[cfg(not(feature = "nvidia-rtx"))]
+                {
+                    #[cfg(has_cuda)]
+                    info!("Note: CUDA detected but nvidia-rtx feature not enabled. Rebuild with `--features nvidia-rtx`");
+
+                    #[cfg(not(has_cuda))]
+                    info!("Note: CUDA not detected. Install CUDA toolkit for GPU acceleration.");
+                }
+            }
+            Err(e) => warn!("RTX diagnostics failed: {}", e),
+        }
 
         let detector = device_detection::DeviceDetector::new();
         let devices = detector.detect_devices().await?;
@@ -251,7 +333,10 @@ async fn main() -> Result<()> {
         for device in &devices {
             info!("  • {} {} ({})", device.vendor, device.model, device.name);
             if device.is_xlr_interface {
-                info!("    ✅ XLR Interface - Recommended profile: {}", device.recommended_profile);
+                info!(
+                    "    ✅ XLR Interface - Recommended profile: {}",
+                    device.recommended_profile
+                );
             }
         }
 
@@ -262,12 +347,15 @@ async fn main() -> Result<()> {
             info!("🎤 Scarlett Solo 4th Gen: Not detected");
         }
 
-        // Test RTX acceleration
-        match rtx_acceleration::RtxAccelerator::new() {
+        // RTX Accelerator test
+        match RtxAccelerator::new() {
             Ok(rtx) => {
                 info!("🚀 RTX Acceleration: {}", rtx.get_processing_mode());
                 if let Some(caps) = rtx.get_capabilities() {
-                    info!("   Compute: {}.{}", caps.compute_capability.0, caps.compute_capability.1);
+                    info!(
+                        "   Compute: {}.{}",
+                        caps.compute_capability.0, caps.compute_capability.1
+                    );
                     info!("   Memory: {:.1} GB", caps.memory_gb);
                     info!("   RTX Voice: {}", caps.supports_rtx_voice);
                 }
@@ -329,12 +417,16 @@ async fn main() -> Result<()> {
     // Dry-run validation
     if args.dry_run {
         info!("🧪 Dry-run validation mode");
-        info!("Configuration: {}Hz, {} frames, {} channels",
-              config.audio.sample_rate, config.audio.buffer_size, config.audio.channels);
+        info!(
+            "Configuration: {}Hz, {} frames, {} channels",
+            config.audio.sample_rate, config.audio.buffer_size, config.audio.channels
+        );
 
         // Validate configuration
         if config.audio.buffer_size < 32 || config.audio.buffer_size > 4096 {
-            return Err(anyhow::anyhow!("Buffer size must be between 32-4096 frames"));
+            return Err(anyhow::anyhow!(
+                "Buffer size must be between 32-4096 frames"
+            ));
         }
 
         if !config.audio.buffer_size.is_power_of_two() {
@@ -372,13 +464,19 @@ async fn main() -> Result<()> {
             buffer_count: 2,
             aggressive_mode: true,
             cpu_affinity: args.cpu_affinity.as_ref().map(|cores| {
-                cores.split(',').filter_map(|s| s.trim().parse().ok()).collect()
+                cores
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect()
             }),
         };
 
         let mut optimizer = LatencyOptimizer::new(latency_config);
         if let Err(e) = optimizer.optimize() {
-            warn!("RT optimization failed: {}. Continuing with normal priority.", e);
+            warn!(
+                "RT optimization failed: {}. Continuing with normal priority.",
+                e
+            );
         }
     }
 
@@ -390,7 +488,12 @@ async fn main() -> Result<()> {
         phantomlink::run_phantomlink_mode(config).await?
     } else if args.pipewire_module {
         info!("Starting as native PipeWire module");
-        pipewire_module::run(config).await?
+        pipewire_module::run_with_preset(
+            config,
+            args.pipewire_preset.as_deref(),
+            args.processing_mode.as_deref(),
+            args.auto_link,
+        ).await?
     } else {
         info!("Starting standalone audio processor");
         audio::run_standalone(config).await?
@@ -401,7 +504,7 @@ async fn main() -> Result<()> {
 
 fn generate_completions(shell: &str) -> Result<()> {
     use clap::CommandFactory;
-    use clap_complete::{generate, Shell};
+    use clap_complete::{Shell, generate};
     use std::io;
 
     let mut app = Args::command();
@@ -418,34 +521,44 @@ fn generate_completions(shell: &str) -> Result<()> {
 }
 
 async fn run_audio_benchmark(config: config::Config) -> Result<()> {
-    use std::time::{Duration, Instant};
     use low_latency::*;
+    use std::time::{Duration, Instant};
 
     info!("🔬 Running comprehensive audio benchmark");
-    info!("Configuration: {}Hz, {} frames, {} channels",
-          config.audio.sample_rate, config.audio.buffer_size, config.audio.channels);
+    info!(
+        "Configuration: {}Hz, {} frames, {} channels",
+        config.audio.sample_rate, config.audio.buffer_size, config.audio.channels
+    );
 
     // Set up real-time optimization
     RealTimeScheduler::optimize_thread_for_audio()?;
 
-    let scheduler = RealTimeScheduler::new(config.audio.sample_rate, config.audio.buffer_size as usize);
-    let benchmark = AudioBenchmark::new(config.audio.sample_rate, config.audio.buffer_size as usize);
+    let scheduler =
+        RealTimeScheduler::new(config.audio.sample_rate, config.audio.buffer_size as usize);
+    let benchmark =
+        AudioBenchmark::new(config.audio.sample_rate, config.audio.buffer_size as usize);
 
     // Test different buffer sizes for latency analysis
     let test_buffer_sizes = vec![32, 64, 128, 256, 512, 1024];
 
-    info!("📊 Testing optimal buffer sizes for {}ms target latency:", TARGET_LATENCY_MS);
+    info!(
+        "📊 Testing optimal buffer sizes for {}ms target latency:",
+        TARGET_LATENCY_MS
+    );
     for &buffer_size in &test_buffer_sizes {
         let latency = scheduler.calculate_latency(buffer_size);
         let latency_ms = latency.as_secs_f64() * 1000.0;
-        let status = if latency_ms <= TARGET_LATENCY_MS as f64 { "✅" } else { "⚠️" };
+        let status = if latency_ms <= TARGET_LATENCY_MS as f64 {
+            "✅"
+        } else {
+            "⚠️"
+        };
         info!("  {} frames: {:.2}ms {}", buffer_size, latency_ms, status);
     }
 
     // Recommended buffer size
-    let optimal_buffer = RealTimeScheduler::get_optimal_buffer_size(
-        config.audio.sample_rate, TARGET_LATENCY_MS
-    );
+    let optimal_buffer =
+        RealTimeScheduler::get_optimal_buffer_size(config.audio.sample_rate, TARGET_LATENCY_MS);
     info!("🎯 Recommended buffer size: {} frames", optimal_buffer);
 
     // Test lock-free ring buffer performance
@@ -460,8 +573,10 @@ async fn run_audio_benchmark(config: config::Config) -> Result<()> {
         ring_buffer.read(&mut read_buffer)?;
     }
     let ring_buffer_time = ring_buffer_start.elapsed();
-    info!("Ring buffer throughput: {:.2} MB/s",
-          (1000 * 1024 * 4) as f64 / ring_buffer_time.as_secs_f64() / 1_000_000.0);
+    info!(
+        "Ring buffer throughput: {:.2} MB/s",
+        (1000 * 1024 * 4) as f64 / ring_buffer_time.as_secs_f64() / 1_000_000.0
+    );
 
     // Test memory pool performance
     info!("💾 Testing memory pool performance...");
@@ -474,15 +589,17 @@ async fn run_audio_benchmark(config: config::Config) -> Result<()> {
         }
     }
     let pool_time = pool_start.elapsed();
-    info!("Memory pool allocation rate: {:.0} allocs/sec",
-          10000.0 / pool_time.as_secs_f64());
+    info!(
+        "Memory pool allocation rate: {:.0} allocs/sec",
+        10000.0 / pool_time.as_secs_f64()
+    );
 
     // Test real-time audio processing simulation
     info!("🎵 Simulating real-time audio processing for 5 seconds...");
     let mut processor = noise_suppression::NoiseProcessor::new(&config.noise_suppression)?;
 
     let _frame_duration = Duration::from_micros(
-        (config.audio.buffer_size as f64 / config.audio.sample_rate as f64 * 1_000_000.0) as u64
+        (config.audio.buffer_size as f64 / config.audio.sample_rate as f64 * 1_000_000.0) as u64,
     );
 
     let test_duration = Duration::from_secs(5);
@@ -510,17 +627,28 @@ async fn run_audio_benchmark(config: config::Config) -> Result<()> {
     }
 
     let total_time = start_time.elapsed();
-    let expected_frames = (total_time.as_secs_f64() * config.audio.sample_rate as f64 / config.audio.buffer_size as f64) as u64;
+    let expected_frames = (total_time.as_secs_f64() * config.audio.sample_rate as f64
+        / config.audio.buffer_size as f64) as u64;
     let frame_accuracy = (frame_count as f64 / expected_frames as f64) * 100.0;
 
     info!("🏆 Benchmark Results:");
     info!("  Duration: {:.2}s", total_time.as_secs_f64());
-    info!("  Frames processed: {} (expected: {})", frame_count, expected_frames);
+    info!(
+        "  Frames processed: {} (expected: {})",
+        frame_count, expected_frames
+    );
     info!("  Frame timing accuracy: {:.2}%", frame_accuracy);
+
+    let stats = benchmark.get_stats();
+    info!("  Avg frame latency: {:.2}μs", stats.avg_latency_us);
+    info!("  P99 frame latency: {:.2}μs", stats.p99_latency_us);
+    info!(
+        "  Max frame time: {:.2}μs",
+        stats.max_processing_time.as_micros()
+    );
 
     benchmark.report_stats();
 
-    let stats = benchmark.get_stats();
     if stats.xrun_count == 0 {
         info!("🎉 Perfect real-time performance achieved!");
         info!("GhostWave is ready for professional audio use");

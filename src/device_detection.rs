@@ -2,7 +2,7 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
 struct AlsaCard {
@@ -47,43 +47,52 @@ impl DeviceDetector {
 
     fn load_known_devices(&mut self) {
         // Focusrite Scarlett Solo 4th Gen
-        self.known_devices.insert("scarlett_solo_4th".to_string(), AudioDevice {
-            name: "Scarlett Solo USB".to_string(),
-            id: "scarlett_solo_4th".to_string(),
-            device_type: AudioDeviceType::XlrInterface,
-            channels: 2,
-            sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
-            vendor: "Focusrite".to_string(),
-            model: "Scarlett Solo 4th Gen".to_string(),
-            is_xlr_interface: true,
-            recommended_profile: "studio".to_string(),
-        });
+        self.known_devices.insert(
+            "scarlett_solo_4th".to_string(),
+            AudioDevice {
+                name: "Scarlett Solo USB".to_string(),
+                id: "scarlett_solo_4th".to_string(),
+                device_type: AudioDeviceType::XlrInterface,
+                channels: 2,
+                sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+                vendor: "Focusrite".to_string(),
+                model: "Scarlett Solo 4th Gen".to_string(),
+                is_xlr_interface: true,
+                recommended_profile: "studio".to_string(),
+            },
+        );
 
         // Focusrite Scarlett 2i2 4th Gen
-        self.known_devices.insert("scarlett_2i2_4th".to_string(), AudioDevice {
-            name: "Scarlett 2i2 USB".to_string(),
-            id: "scarlett_2i2_4th".to_string(),
-            device_type: AudioDeviceType::XlrInterface,
-            channels: 2,
-            sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
-            vendor: "Focusrite".to_string(),
-            model: "Scarlett 2i2 4th Gen".to_string(),
-            is_xlr_interface: true,
-            recommended_profile: "studio".to_string(),
-        });
+        self.known_devices.insert(
+            "scarlett_2i2_4th".to_string(),
+            AudioDevice {
+                name: "Scarlett 2i2 USB".to_string(),
+                id: "scarlett_2i2_4th".to_string(),
+                device_type: AudioDeviceType::XlrInterface,
+                channels: 2,
+                sample_rates: vec![44100, 48000, 88200, 96000, 176400, 192000],
+                vendor: "Focusrite".to_string(),
+                model: "Scarlett 2i2 4th Gen".to_string(),
+                is_xlr_interface: true,
+                recommended_profile: "studio".to_string(),
+            },
+        );
 
         // Add more known XLR interfaces
-        self.known_devices.insert("behringer_u_phoria_um2".to_string(), AudioDevice {
-            name: "U-PHORIA UM2".to_string(),
-            id: "behringer_u_phoria_um2".to_string(),
-            device_type: AudioDeviceType::XlrInterface,
-            channels: 2,
-            sample_rates: vec![44100, 48000],
-            vendor: "Behringer".to_string(),
-            model: "U-PHORIA UM2".to_string(),
-            is_xlr_interface: true,
-            recommended_profile: "balanced".to_string(),
-        });
+        self.known_devices.insert(
+            "behringer_u_phoria_um2".to_string(),
+            AudioDevice {
+                name: "U-PHORIA UM2".to_string(),
+                id: "behringer_u_phoria_um2".to_string(),
+                device_type: AudioDeviceType::XlrInterface,
+                channels: 2,
+                sample_rates: vec![44100, 48000],
+                vendor: "Behringer".to_string(),
+                model: "U-PHORIA UM2".to_string(),
+                is_xlr_interface: true,
+                recommended_profile: "balanced".to_string(),
+            },
+        );
 
         info!("Loaded {} known audio devices", self.known_devices.len());
     }
@@ -109,7 +118,10 @@ impl DeviceDetector {
                         // Try to match with ALSA card info first
                         let mut identified_device = None;
                         for alsa_card in &alsa_cards {
-                            if name.to_lowercase().contains(&alsa_card.short_name.to_lowercase()) {
+                            if name
+                                .to_lowercase()
+                                .contains(&alsa_card.short_name.to_lowercase())
+                            {
                                 debug!("Matched ALSA card: {} -> {}", name, alsa_card.long_name);
                                 identified_device = self.identify_device_from_alsa(alsa_card);
                                 break;
@@ -122,7 +134,10 @@ impl DeviceDetector {
                         }
 
                         if let Some(known_device) = identified_device {
-                            info!("✅ Identified: {} ({})", known_device.model, known_device.vendor);
+                            info!(
+                                "✅ Identified: {} ({})",
+                                known_device.model, known_device.vendor
+                            );
                             detected_devices.push(known_device);
                         } else {
                             // Create generic device entry
@@ -160,13 +175,18 @@ impl DeviceDetector {
                 if let Some(bracket_start) = line.find('[') {
                     if let Some(bracket_end) = line.find(']') {
                         if let Some(dash_pos) = line.rfind(" - ") {
-                            let short_name = line[bracket_start + 1..bracket_end].trim().to_string();
+                            let short_name =
+                                line[bracket_start + 1..bracket_end].trim().to_string();
                             let long_name = line[dash_pos + 3..].trim().to_string();
                             cards.push(AlsaCard {
                                 short_name,
                                 long_name,
                             });
-                            debug!("Found ALSA card: {} -> {}", cards.last().unwrap().short_name, cards.last().unwrap().long_name);
+                            debug!(
+                                "Found ALSA card: {} -> {}",
+                                cards.last().unwrap().short_name,
+                                cards.last().unwrap().long_name
+                            );
                         }
                     }
                 }
@@ -181,16 +201,25 @@ impl DeviceDetector {
 
         // Check for Scarlett Solo 4th Gen specifically
         if long_name_lower.contains("scarlett solo 4th gen") {
-            info!("🎯 Found Scarlett Solo 4th Gen via ALSA: {}", alsa_card.long_name);
+            info!(
+                "🎯 Found Scarlett Solo 4th Gen via ALSA: {}",
+                alsa_card.long_name
+            );
             return self.known_devices.get("scarlett_solo_4th").cloned();
         }
 
         // Check for other Scarlett devices
         if long_name_lower.contains("scarlett") {
-            info!("🎤 Found Focusrite Scarlett device: {}", alsa_card.long_name);
+            info!(
+                "🎤 Found Focusrite Scarlett device: {}",
+                alsa_card.long_name
+            );
             return Some(AudioDevice {
                 name: alsa_card.long_name.clone(),
-                id: format!("focusrite_{}", alsa_card.short_name.replace(" ", "_").to_lowercase()),
+                id: format!(
+                    "focusrite_{}",
+                    alsa_card.short_name.replace(" ", "_").to_lowercase()
+                ),
                 device_type: AudioDeviceType::XlrInterface,
                 channels: 2,
                 sample_rates: vec![44100, 48000, 96000, 192000],
@@ -214,7 +243,10 @@ impl DeviceDetector {
 
         // Check for the ALSA device name pattern that maps to Scarlett Solo
         if name_lower.contains("card=gen") || name_lower == "gen" {
-            info!("Detected Scarlett Solo 4th Gen via ALSA card mapping: {}", device_name);
+            info!(
+                "Detected Scarlett Solo 4th Gen via ALSA card mapping: {}",
+                device_name
+            );
             return self.known_devices.get("scarlett_solo_4th").cloned();
         }
 
@@ -264,8 +296,14 @@ impl DeviceDetector {
         Ok(None)
     }
 
-    pub async fn get_optimal_config_for_device(&self, device: &AudioDevice) -> Result<crate::config::Config> {
-        info!("Generating optimal config for: {} {}", device.vendor, device.model);
+    pub async fn get_optimal_config_for_device(
+        &self,
+        device: &AudioDevice,
+    ) -> Result<crate::config::Config> {
+        info!(
+            "Generating optimal config for: {} {}",
+            device.vendor, device.model
+        );
 
         let mut config = crate::config::Config::load(&device.recommended_profile)?;
 
@@ -298,6 +336,7 @@ impl DeviceDetector {
         Ok(config)
     }
 
+    #[allow(dead_code)] // Public API for PhantomLink auto-configuration
     pub async fn auto_configure_for_phantomlink(&self) -> Result<Option<crate::config::Config>> {
         info!("🔧 Auto-configuring GhostWave for PhantomLink + XLR workflow");
 

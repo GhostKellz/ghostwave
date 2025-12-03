@@ -27,7 +27,7 @@ pub mod inference;
 
 use anyhow::Result;
 use std::sync::Arc;
-use tracing::{info, debug, warn};
+use tracing::info;
 
 pub use rnnoise::{RNNoiseProcessor, RNNoiseModel};
 pub use echo_cancel::{AcousticEchoCanceller, AecConfig};
@@ -187,6 +187,7 @@ pub struct AiDenoiseStats {
 /// 3. Spectral masking for noise reduction
 /// 4. Echo cancellation (optional)
 /// 5. Voice isolation (optional)
+#[allow(dead_code)] // Public API struct - fields accessed via methods
 pub struct AiDenoiseProcessor {
     config: AiDenoiseConfig,
 

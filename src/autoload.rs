@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 use tracing::info;
@@ -10,20 +10,17 @@ impl PipeWireAutoload {
         info!("Installing PipeWire autoload configuration");
 
         let config_dir = Self::pipewire_config_dir()?;
-        fs::create_dir_all(&config_dir)
-            .context("Failed to create PipeWire config directory")?;
+        fs::create_dir_all(&config_dir).context("Failed to create PipeWire config directory")?;
 
         // Create module configuration
         let module_config = Self::generate_module_config();
         let module_path = config_dir.join("modules.conf.d").join("90-ghostwave.conf");
 
         if let Some(parent) = module_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create modules.conf.d directory")?;
+            fs::create_dir_all(parent).context("Failed to create modules.conf.d directory")?;
         }
 
-        fs::write(&module_path, &module_config)
-            .context("Failed to write module configuration")?;
+        fs::write(&module_path, &module_config).context("Failed to write module configuration")?;
 
         info!("Created PipeWire module config: {:?}", module_path);
 
@@ -32,12 +29,10 @@ impl PipeWireAutoload {
         let device_path = config_dir.join("devices.conf.d").join("90-ghostwave.conf");
 
         if let Some(parent) = device_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create devices.conf.d directory")?;
+            fs::create_dir_all(parent).context("Failed to create devices.conf.d directory")?;
         }
 
-        fs::write(&device_path, &device_config)
-            .context("Failed to write device configuration")?;
+        fs::write(&device_path, &device_config).context("Failed to write device configuration")?;
 
         info!("Created PipeWire device config: {:?}", device_path);
         info!("✅ PipeWire autoload installed - restart PipeWire to activate");
@@ -52,15 +47,13 @@ impl PipeWireAutoload {
 
         let module_path = config_dir.join("modules.conf.d").join("90-ghostwave.conf");
         if module_path.exists() {
-            fs::remove_file(&module_path)
-                .context("Failed to remove module configuration")?;
+            fs::remove_file(&module_path).context("Failed to remove module configuration")?;
             info!("Removed: {:?}", module_path);
         }
 
         let device_path = config_dir.join("devices.conf.d").join("90-ghostwave.conf");
         if device_path.exists() {
-            fs::remove_file(&device_path)
-                .context("Failed to remove device configuration")?;
+            fs::remove_file(&device_path).context("Failed to remove device configuration")?;
             info!("Removed: {:?}", device_path);
         }
 
@@ -69,8 +62,7 @@ impl PipeWireAutoload {
     }
 
     fn pipewire_config_dir() -> Result<PathBuf> {
-        let mut config_dir = dirs::config_dir()
-            .context("Failed to get config directory")?;
+        let mut config_dir = dirs::config_dir().context("Failed to get config directory")?;
         config_dir.push("pipewire");
         Ok(config_dir)
     }
@@ -106,7 +98,8 @@ context.modules = [
         }
     }
 ]
-"#.to_string()
+"#
+        .to_string()
     }
 
     fn generate_device_config() -> String {
@@ -127,7 +120,8 @@ context.objects = [
         }
     }
 ]
-"#.to_string()
+"#
+        .to_string()
     }
 }
 

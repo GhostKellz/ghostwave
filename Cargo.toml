@@ -1,6 +1,10 @@
+[workspace]
+members = ["ghostwave-core", "ghostwave-vst"]
+resolver = "2"
+
 [package]
 name = "ghostwave"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -31,8 +35,13 @@ uuid = { version = "1.0", features = ["v4"] }
 version = "0.11"
 optional = true
 default-features = false
-features = ["std"]
+features = ["std", "cuda-12000", "driver"]
 
 [features]
 default = []
-nvidia-rtx = ["cudarc"]
+# RTX acceleration - can be explicitly enabled or auto-detected via build.rs
+# When CUDA is detected at build time, `has_cuda` cfg is set automatically
+nvidia-rtx = ["cudarc", "ghostwave-core/nvidia-rtx"]
+
+[build-dependencies]
+# No external dependencies needed for build.rs

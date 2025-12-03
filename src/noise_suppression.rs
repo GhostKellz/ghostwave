@@ -1,25 +1,30 @@
 use anyhow::Result;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 use crate::config::NoiseSuppressionConfig;
+#[cfg(feature = "nvidia-rtx")]
 use crate::rtx_acceleration::RtxAccelerator;
 
 pub struct NoiseProcessor {
     config: NoiseSuppressionConfig,
     gate: NoiseGate,
     spectral_filter: SpectralFilter,
+    #[cfg(feature = "nvidia-rtx")]
     rtx_accelerator: Option<RtxAccelerator>,
 }
 
 impl NoiseProcessor {
     pub fn new(config: &NoiseSuppressionConfig) -> Result<Self> {
-        // Try to initialize RTX acceleration
+        #[cfg(feature = "nvidia-rtx")]
         let rtx_accelerator = match RtxAccelerator::new() {
             Ok(accelerator) => {
                 if accelerator.is_rtx_available() {
                     if let Some(caps) = accelerator.get_capabilities() {
                         info!("🚀 RTX acceleration enabled:");
-                        info!("   GPU: Compute {}.{}", caps.compute_capability.0, caps.compute_capability.1);
+                        info!(
+                            "   GPU: Compute {}.{}",
+                            caps.compute_capability.0, caps.compute_capability.1
+                        );
                         info!("   Memory: {:.1} GB", caps.memory_gb);
                         info!("   Tensor Cores: {}", caps.has_tensor_cores);
                         info!("   RTX Voice Support: {}", caps.supports_rtx_voice);
@@ -37,10 +42,16 @@ impl NoiseProcessor {
             }
         };
 
+        #[cfg(not(feature = "nvidia-rtx"))]
+        {
+            info!("💻 Using CPU-only processing (RTX support not compiled)");
+        }
+
         Ok(Self {
             config: config.clone(),
             gate: NoiseGate::new(config.gate_threshold, config.release_time),
             spectral_filter: SpectralFilter::new(config.strength),
+            #[cfg(feature = "nvidia-rtx")]
             rtx_accelerator,
         })
     }
@@ -53,17 +64,26 @@ impl NoiseProcessor {
 
         let mut temp_buffer = vec![0.0f32; input.len()];
 
-        // Try RTX acceleration first, fall back to CPU if needed
-        if let Some(ref rtx) = self.rtx_accelerator {
-            if rtx.is_rtx_available() {
-                debug!("Processing with RTX acceleration");
-                rtx.process_spectral_denoising(input, &mut temp_buffer, self.config.strength)?;
+        #[cfg(feature = "nvidia-rtx")]
+        {
+            // Try RTX acceleration first, fall back to CPU if needed
+            if let Some(ref rtx) = self.rtx_accelerator {
+                if rtx.is_rtx_available() {
+                    debug!("Processing with RTX acceleration");
+                    rtx.process_spectral_denoising(input, &mut temp_buffer, self.config.strength)?;
+                } else {
+                    debug!("Processing with CPU spectral filter");
+                    self.spectral_filter.process(input, &mut temp_buffer);
+                }
             } else {
-                debug!("Processing with CPU spectral filter");
+                debug!("Processing with CPU spectral filter (no RTX)");
                 self.spectral_filter.process(input, &mut temp_buffer);
             }
-        } else {
-            debug!("Processing with CPU spectral filter (no RTX)");
+        }
+
+        #[cfg(not(feature = "nvidia-rtx"))]
+        {
+            debug!("Processing with CPU spectral filter (RTX not compiled)");
             self.spectral_filter.process(input, &mut temp_buffer);
         }
 
@@ -74,25 +94,36 @@ impl NoiseProcessor {
     }
 
     pub fn get_processing_mode(&self) -> String {
-        if let Some(ref rtx) = self.rtx_accelerator {
-            if rtx.is_rtx_available() {
-                format!("RTX GPU + CPU Gate")
-            } else {
-                "CPU Only".to_string()
+        #[cfg(feature = "nvidia-rtx")]
+        {
+            if let Some(ref rtx) = self.rtx_accelerator {
+                if rtx.is_rtx_available() {
+                    return "RTX GPU + CPU Gate".to_string();
+                }
             }
-        } else {
-            "CPU Only".to_string()
         }
+        "CPU Only".to_string()
     }
 
+    #[allow(dead_code)] // Public API for RTX feature detection
     pub fn has_rtx_acceleration(&self) -> bool {
-        self.rtx_accelerator
-            .as_ref()
-            .map(|rtx| rtx.is_rtx_available())
-            .unwrap_or(false)
+        #[cfg(feature = "nvidia-rtx")]
+        {
+            return self
+                .rtx_accelerator
+                .as_ref()
+                .map(|rtx| rtx.is_rtx_available())
+                .unwrap_or(false);
+        }
+
+        #[cfg(not(feature = "nvidia-rtx"))]
+        {
+            false
+        }
     }
 }
 
+#[allow(dead_code)] // DSP component - fields used in process
 struct NoiseGate {
     threshold: f32,
     release_time: f32,
@@ -137,6 +168,7 @@ impl NoiseGate {
     }
 }
 
+#[allow(dead_code)] // DSP component - fields for STFT processing
 struct SpectralFilter {
     strength: f32,
     frame_size: usize,

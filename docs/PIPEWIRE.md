@@ -27,6 +27,11 @@ PipeWire is the recommended audio backend for GhostWave on modern Linux systems:
 
 ### GhostWave PipeWire Integration
 
+> **Note (v0.2.0)**: GhostWave now uses `AudioStream` from `ghostwave_core` for real-time
+> audio processing. The low-level `pw_filter` callback integration is work-in-progress.
+> When `AudioStream` is unavailable, a simulated processing loop is used as fallback.
+> See [KNOWN_GAPS.md](KNOWN_GAPS.md) for current limitations.
+
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Application   │    │   GhostWave     │    │   PipeWire      │
@@ -190,15 +195,32 @@ pw-link ghostwave_output:output_FR alsa_output.pci-0000_00_1f.3.analog-stereo:pl
 Run as a native PipeWire module for seamless integration:
 
 ```bash
-# Start module with auto-routing
-./ghostwave --pipewire-module --profile balanced
+# Start module with auto-linking to default audio devices (recommended)
+./ghostwave --pipewire-module --auto-link --profile balanced
 
-# With specific device targeting
+# With specific processing mode (NVIDIA Maxine compatible)
+./ghostwave --pipewire-module --auto-link --processing-mode low-latency   # 10ms (gaming/Discord)
+./ghostwave --pipewire-module --auto-link --processing-mode balanced      # 20ms (general use)
+./ghostwave --pipewire-module --auto-link --processing-mode high-quality  # 50ms (recording)
+
+# With preset configurations
+./ghostwave --pipewire-module --auto-link --pipewire-preset gaming     # Optimized for Discord
+./ghostwave --pipewire-module --auto-link --pipewire-preset recording  # High-quality audio
+./ghostwave --pipewire-module --auto-link --pipewire-preset rtx50      # RTX 50 series optimized
+
+# Without auto-linking (for manual routing via qpwgraph)
 ./ghostwave --pipewire-module --profile studio --verbose
 
 # Monitor performance
 ./ghostwave --pipewire-module --bench
 ```
+
+> **v0.2.0 Auto-Linking**:
+> - Use `--auto-link` to automatically connect GhostWave to your default audio devices
+> - Requires `pw-link` (part of `pipewire-tools` package)
+> - If auto-linking fails, you can manually link using `pw-link` or `qpwgraph`
+> - Virtual devices `ghostwave_input` and `ghostwave_output` are created
+> - Use `pw-cli ls Node` to verify GhostWave appears in the node list
 
 **Benefits:**
 - Automatic audio routing

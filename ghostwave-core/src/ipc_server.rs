@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn, debug, error};
 
 use crate::processor::{ProcessingProfile, ParamValue, ParamDescriptor};
+use crate::telemetry::TelemetryCollector;
 
 /// JSON-RPC request structure
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +96,7 @@ pub trait IpcMethodHandler: Send + Sync {
 pub struct GhostWaveIpcHandler {
     processor_state: Arc<RwLock<ProcessorState>>,
     auth_tokens: Arc<Mutex<HashMap<String, AuthToken>>>,
+    telemetry: Option<Arc<TelemetryCollector>>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,7 +147,15 @@ impl GhostWaveIpcHandler {
         Self {
             processor_state: Arc::new(RwLock::new(state)),
             auth_tokens: Arc::new(Mutex::new(HashMap::new())),
+            telemetry: crate::telemetry::telemetry(),
         }
+    }
+
+    /// Create handler with telemetry collector
+    pub fn with_telemetry(telemetry: Arc<TelemetryCollector>) -> Self {
+        let mut handler = Self::new();
+        handler.telemetry = Some(telemetry);
+        handler
     }
 
     pub fn update_state<F>(&self, updater: F) -> Result<()>
@@ -274,9 +284,16 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
 
                 let state = self.get_state()?;
                 if let Some(value) = state.parameters.get(param_name) {
+                    // Convert ParamValue to plain JSON value
+                    let json_value = match value {
+                        crate::processor::ParamValue::Float(f) => json!(*f),
+                        crate::processor::ParamValue::Int(i) => json!(*i),
+                        crate::processor::ParamValue::Bool(b) => json!(*b),
+                        crate::processor::ParamValue::String(s) => json!(s),
+                    };
                     Ok(json!({
                         "name": param_name,
-                        "value": value
+                        "value": json_value
                     }))
                 } else {
                     Err(anyhow::anyhow!("Parameter not found: {}", param_name))
@@ -409,6 +426,63 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
                 Ok(json!({ "reset": true }))
             }
 
+            // Telemetry methods
+            "telemetry.snapshot" => {
+                if let Some(ref telemetry) = self.telemetry {
+                    let snapshot = telemetry.snapshot();
+                    Ok(serde_json::to_value(snapshot).unwrap_or(json!({"error": "serialization failed"})))
+                } else {
+                    Ok(json!({
+                        "error": "Telemetry not initialized",
+                        "hint": "Call init_telemetry() first"
+                    }))
+                }
+            }
+
+            "telemetry.performance" => {
+                if let Some(ref telemetry) = self.telemetry {
+                    let metrics = telemetry.get_performance_metrics();
+                    Ok(serde_json::to_value(metrics).unwrap_or(json!({})))
+                } else {
+                    let state = self.get_state()?;
+                    Ok(json!(state.stats))
+                }
+            }
+
+            "telemetry.gpu" => {
+                if let Some(ref telemetry) = self.telemetry {
+                    let gpu = telemetry.get_gpu_metrics();
+                    Ok(serde_json::to_value(gpu).unwrap_or(json!({})))
+                } else {
+                    Ok(json!({
+                        "available": false,
+                        "processing_mode": "CPU"
+                    }))
+                }
+            }
+
+            "telemetry.audio" => {
+                if let Some(ref telemetry) = self.telemetry {
+                    let audio = telemetry.get_audio_metrics();
+                    Ok(serde_json::to_value(audio).unwrap_or(json!({})))
+                } else {
+                    Ok(json!({
+                        "input_level_db": -60.0,
+                        "output_level_db": -60.0,
+                        "voice_active": false
+                    }))
+                }
+            }
+
+            "telemetry.reset" => {
+                if let Some(ref telemetry) = self.telemetry {
+                    telemetry.reset();
+                    Ok(json!({ "reset": true }))
+                } else {
+                    Ok(json!({ "reset": false, "reason": "Telemetry not initialized" }))
+                }
+            }
+
             _ => Err(anyhow::anyhow!("Unknown method: {}", method)),
         }
     }
@@ -438,6 +512,12 @@ impl IpcMethodHandler for GhostWaveIpcHandler {
             "enable".to_string(),
             "disable".to_string(),
             "reset".to_string(),
+            // Telemetry
+            "telemetry.snapshot".to_string(),
+            "telemetry.performance".to_string(),
+            "telemetry.gpu".to_string(),
+            "telemetry.audio".to_string(),
+            "telemetry.reset".to_string(),
         ]
     }
 }
@@ -695,6 +775,7 @@ pub fn start_ipc_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)] // Used in integration tests
     use tempfile::NamedTempFile;
 
     #[test]

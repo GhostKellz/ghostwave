@@ -111,7 +111,6 @@ pub struct DeviceManager {
     config: DeviceSelectionConfig,
     detector: DeviceDetector,
     current_device: Arc<Mutex<Option<AudioDevice>>>,
-    last_scan: Arc<Mutex<Instant>>,
     pending_events: Arc<Mutex<Vec<(Instant, HotplugEvent)>>>,
     hotplug_callbacks: Arc<Mutex<Vec<Box<dyn Fn(&HotplugEvent) + Send + Sync>>>>,
     is_monitoring: Arc<Mutex<bool>>,
@@ -123,7 +122,6 @@ impl DeviceManager {
             config,
             detector: DeviceDetector::new(),
             current_device: Arc::new(Mutex::new(None)),
-            last_scan: Arc::new(Mutex::new(Instant::now())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
             hotplug_callbacks: Arc::new(Mutex::new(Vec::new())),
             is_monitoring: Arc::new(Mutex::new(false)),
@@ -439,10 +437,16 @@ impl DeviceManager {
         // Clone device data to avoid borrow conflicts
         let device_type = score.device.device_type.clone();
         let is_xlr = score.device.is_xlr_interface;
+        let device_name = score.device.name.clone();
         let device_vendor = score.device.vendor.clone();
+        let device_model = score.device.model.clone();
+        let supported_sample_rates = score.device.supported_sample_rates.clone();
+        let supported_buffer_sizes = score.device.supported_buffer_sizes.clone();
+        let channels = score.device.channels;
 
         score.add_score(10, "Base functionality");
 
+        // Type preference scoring
         for (index, preferred_type) in config.preferred_types.iter().enumerate() {
             if device_type == *preferred_type {
                 let type_score = 100 - (index * 10) as u32;
@@ -451,15 +455,73 @@ impl DeviceManager {
             }
         }
 
+        // XLR interface bonus
         if is_xlr && config.prefer_xlr_interfaces {
             score.add_score(50, "XLR professional interface");
         }
 
+        // USB audio preference
+        if device_name.to_lowercase().contains("usb") && config.prefer_usb_audio {
+            score.add_score(30, "USB audio device");
+        }
+
+        // Vendor preference
         for preferred_vendor in &config.preferred_vendors {
             if device_vendor.to_lowercase().contains(&preferred_vendor.to_lowercase()) {
                 score.add_score(40, &format!("Preferred vendor: {}", preferred_vendor));
                 break;
             }
+        }
+
+        // Name preference
+        for preferred_name in &config.preferred_names {
+            if device_name.to_lowercase().contains(&preferred_name.to_lowercase()) ||
+               device_model.to_lowercase().contains(&preferred_name.to_lowercase()) {
+                score.add_score(30, &format!("Preferred name pattern: {}", preferred_name));
+                break;
+            }
+        }
+
+        // Sample rate capability
+        if let Some(max_sr) = supported_sample_rates.iter().max() {
+            if *max_sr >= 96000 {
+                score.add_score(25, "High sample rate support (96kHz+)");
+            } else if *max_sr >= 48000 {
+                score.add_score(15, "Standard sample rate support (48kHz+)");
+            }
+
+            if *max_sr < config.min_sample_rate {
+                return; // Don't score further if it doesn't meet requirements
+            }
+        }
+
+        // Channel count
+        match channels {
+            1 => score.add_score(10, "Mono input"),
+            2 => score.add_score(20, "Stereo input"),
+            n if n > 2 => score.add_score(15, &format!("{} channel input", n)),
+            _ => {}
+        }
+
+        // Latency estimate based on buffer size
+        if let Some(min_buffer) = supported_buffer_sizes.iter().min() {
+            let estimated_latency = (*min_buffer as f32 / 48000.0) * 1000.0;
+            if estimated_latency <= config.max_latency_ms {
+                let latency_score = ((config.max_latency_ms - estimated_latency) * 2.0) as u32;
+                score.add_score(latency_score.min(20), &format!("Low latency: {:.1}ms", estimated_latency));
+            }
+        }
+
+        // Known good devices
+        let device_key = format!("{} {}", device_vendor, device_model).to_lowercase();
+        if device_key.contains("focusrite") && device_key.contains("scarlett") {
+            score.add_score(60, "Focusrite Scarlett (known excellent)");
+        } else if device_key.contains("presonus") {
+            score.add_score(50, "PreSonus interface (known good)");
+        } else if device_key.contains("blue") && device_key.contains("yeti") {
+            score.add_score(45, "Blue Yeti (popular choice)");
+        } else if device_key.contains("rode") {
+            score.add_score(40, "Rode microphone (quality brand)");
         }
     }
 }
