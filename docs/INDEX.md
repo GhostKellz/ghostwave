@@ -44,6 +44,13 @@ Complete documentation for GhostWave - NVIDIA RTX Voice for Linux.
   - Adding features
   - Code style guidelines
 
+- [**Deployment Guide**](DEPLOYMENT.md) - Production deployment
+  - System requirements
+  - Installation methods
+  - SystemD service setup
+  - Security hardening
+  - Monitoring & maintenance
+
 ---
 
 ## Audio Integration
