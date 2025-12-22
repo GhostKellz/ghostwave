@@ -4,8 +4,19 @@ resolver = "2"
 
 [package]
 name = "ghostwave"
-version = "0.2.0"
-edition = "2024"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT OR Apache-2.0"
+description = "Professional AI-powered audio processing with RTX GPU acceleration - NVIDIA Broadcast for Linux"
+authors = ["Ghost Ecosystem <dev@ghost-ecosystem.dev>"]
+repository = "https://github.com/ghostkellz/ghostwave"
+homepage = "https://github.com/ghostkellz/ghostwave"
+documentation = "https://docs.rs/ghostwave"
+readme = "README.md"
+keywords = ["audio", "noise-reduction", "rtx", "pipewire", "broadcast"]
+categories = ["multimedia::audio", "hardware-support"]
+exclude = ["docs/", "tests/", ".github/"]
 
 [dependencies]
 ghostwave-core = { path = "./ghostwave-core", features = ["pipewire-backend", "alsa-backend", "jack-backend", "cpal-backend"] }

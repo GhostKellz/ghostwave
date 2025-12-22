@@ -153,7 +153,8 @@ pub struct GhostWaveParams {
 impl Default for GhostWaveParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(800, 600),
+            // Larger window for NVIDIA Broadcast-style layout
+            editor_state: EguiState::from_size(760, 580),
 
             // ═══════════════════════════════════════════════════════════════
             // NOISE SUPPRESSION
