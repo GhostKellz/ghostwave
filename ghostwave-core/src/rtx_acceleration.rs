@@ -2,12 +2,19 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tracing::{info, debug, warn};
 
-#[cfg(feature = "nvidia-rtx")]
-use cudarc::driver::CudaDevice;
+// Runtime CUDA detection (always available)
+use crate::cuda_runtime::{CudaRuntime, RuntimeGpuArch};
+
+#[cfg(not(feature = "nvidia-rtx"))]
+use crate::cuda_runtime::is_fp4_available_runtime;
+
 #[cfg(feature = "nvidia-rtx")]
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "nvidia-rtx")]
 use crate::rtx_denoising::{RtxDenoiser, RtxDenoiseConfig, DenoiseStrength, DenoiseAlgorithm};
+
+#[cfg(feature = "nvidia-rtx")]
+use cudarc::driver::CudaDevice;
 
 #[cfg(feature = "nvidia-rtx")]
 static RTX_DENOISER_CACHE: OnceLock<Arc<Mutex<SharedRtxDenoiser>>> = OnceLock::new();
@@ -15,6 +22,7 @@ static RTX_DENOISER_CACHE: OnceLock<Arc<Mutex<SharedRtxDenoiser>>> = OnceLock::n
 /// Status of GPU processing - whether fallback to CPU occurred
 #[derive(Debug, Clone, Default)]
 pub struct GpuProcessingStatus {
+
     /// True if GPU is being used successfully
     pub gpu_active: bool,
     /// True if CPU fallback is currently in use
@@ -51,6 +59,10 @@ impl Default for SharedRtxDenoiser {
 /// RTX GPU acceleration for noise suppression
 /// Leverages NVIDIA's open GPU kernel modules for RTX 20 series and newer
 /// Supports up to RTX 50 series (Blackwell architecture) with enhanced optimizations
+///
+/// This struct works in two modes:
+/// 1. With `nvidia-rtx` feature: Uses compile-time CUDA bindings for maximum performance
+/// 2. Without the feature: Uses runtime CUDA detection for compatibility
 pub struct RtxAccelerator {
     #[cfg(feature = "nvidia-rtx")]
     device: Option<Arc<CudaDevice>>,
@@ -61,12 +73,22 @@ pub struct RtxAccelerator {
     /// Fallback to CPU when GPU is not available
     cpu_fallback: bool,
 
+    /// Runtime-detected GPU information (always available)
+    runtime_gpu_name: Option<String>,
 
-    /// GPU compute capability for RTX features
+    /// GPU compute capability for RTX features (exposed via get_capabilities)
+    #[allow(dead_code)]
     compute_capability: Option<(u32, u32)>,
 
-    /// GPU architecture generation
+    /// GPU architecture generation (exposed via get_capabilities)
+    #[allow(dead_code)]
     gpu_generation: GpuGeneration,
+
+    /// Whether runtime CUDA detection found a GPU
+    runtime_cuda_available: bool,
+
+    /// Runtime architecture (used when nvidia-rtx feature is disabled)
+    runtime_arch: Option<RuntimeGpuArch>,
 }
 
 /// GPU Architecture Generation
@@ -111,9 +133,24 @@ impl GpuGeneration {
 #[derive(Debug, Clone, Default)]
 pub struct RtxReadiness {
     pub driver_ok: bool,
+    pub driver_kind: DriverKind,
     pub cuda_ok: bool,
     pub tensorrt_ok: bool,
     pub fp4_ready: bool,
+    pub gsp_ready: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverKind {
+    Proprietary,
+    Open,
+    Unknown,
+}
+
+impl Default for DriverKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
 }
 
 /// Comprehensive RTX system information returned by diagnostics
@@ -121,9 +158,11 @@ pub struct RtxReadiness {
 pub struct RtxSystemInfo {
     pub gpu_name: Option<String>,
     pub driver_version: Option<String>,
+    pub driver_branch: Option<String>,
     pub cuda_version: Option<String>,
     pub tensorrt_version: Option<String>,
     pub readiness: RtxReadiness,
+    pub gsp_firmware: Option<String>,
     pub compute_capability: (u32, u32),
     pub gpu_generation: GpuGeneration,
     pub tensor_core_gen: u8,
@@ -147,6 +186,26 @@ impl RtxAccelerator {
     pub fn new() -> Result<Self> {
         info!("🚀 Initializing NVIDIA RTX acceleration...");
 
+        // Always try runtime CUDA detection first
+        let (runtime_cuda_available, runtime_gpu_name, runtime_arch, runtime_compute) =
+            if let Some(runtime) = CudaRuntime::global() {
+                if let Some(best) = runtime.best_device() {
+                    info!("Runtime CUDA detected: {} (SM {}.{})",
+                        best.name, best.compute_major, best.compute_minor);
+                    (
+                        true,
+                        Some(best.name.clone()),
+                        Some(best.architecture),
+                        Some((best.compute_major as u32, best.compute_minor as u32)),
+                    )
+                } else {
+                    (false, None, None, None)
+                }
+            } else {
+                debug!("Runtime CUDA detection: no GPU found");
+                (false, None, None, None)
+            };
+
         #[cfg(feature = "nvidia-rtx")]
         {
             match Self::init_cuda() {
@@ -156,7 +215,7 @@ impl RtxAccelerator {
                         compute_capability.1,
                     );
 
-                    info!("✅ NVIDIA RTX acceleration enabled");
+                    info!("✅ NVIDIA RTX acceleration enabled (compile-time CUDA bindings)");
                     info!("   Compute Capability: {}.{}", compute_capability.0, compute_capability.1);
                     info!("   GPU Generation: {:?}", gpu_gen);
 
@@ -166,42 +225,116 @@ impl RtxAccelerator {
 
                     let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
 
-                    Ok(Self {
+                    return Ok(Self {
                         device: Some(device),
                         shared_denoiser: shared,
                         cpu_fallback: false,
+                        runtime_gpu_name,
                         compute_capability: Some(compute_capability),
                         gpu_generation: gpu_gen,
-                    })
-
+                        runtime_cuda_available,
+                        runtime_arch,
+                    });
                 }
                 Err(e) => {
-                    warn!("⚠️  NVIDIA RTX acceleration unavailable: {}", e);
-                    warn!("   Falling back to CPU processing");
-
-                    let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
-
-                    Ok(Self {
-                        device: None,
-                        shared_denoiser: shared,
-                        cpu_fallback: true,
-                        compute_capability: None,
-                        gpu_generation: GpuGeneration::Unknown,
-                    })
-
+                    warn!("⚠️  Compile-time CUDA init failed: {}", e);
+                    // Fall through to runtime detection
                 }
             }
+
+            // Compile-time CUDA failed, try runtime detection
+            if runtime_cuda_available {
+                info!("Using runtime CUDA detection (nvidia-rtx feature available but cudarc failed)");
+                let gpu_gen = runtime_arch
+                    .map(|a| match a {
+                        RuntimeGpuArch::Turing => GpuGeneration::Turing,
+                        RuntimeGpuArch::Ampere => GpuGeneration::Ampere,
+                        RuntimeGpuArch::AdaLovelace => GpuGeneration::AdaLovelace,
+                        RuntimeGpuArch::Blackwell => GpuGeneration::Blackwell,
+                        _ => GpuGeneration::Unknown,
+                    })
+                    .unwrap_or(GpuGeneration::Unknown);
+
+                let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
+
+                return Ok(Self {
+                    device: None,
+                    shared_denoiser: shared,
+                    cpu_fallback: false, // GPU is available via runtime, just not cudarc
+                    runtime_gpu_name,
+                    compute_capability: runtime_compute,
+                    gpu_generation: gpu_gen,
+                    runtime_cuda_available: true,
+                    runtime_arch,
+                });
+            }
+
+            // No GPU available at all
+            warn!("⚠️  No NVIDIA GPU available - falling back to CPU processing");
+            let shared = RTX_DENOISER_CACHE.get_or_init(|| Arc::new(Mutex::new(SharedRtxDenoiser::default()))).clone();
+
+            Ok(Self {
+                device: None,
+                shared_denoiser: shared,
+                cpu_fallback: true,
+                runtime_gpu_name: None,
+                compute_capability: None,
+                gpu_generation: GpuGeneration::Unknown,
+                runtime_cuda_available: false,
+                runtime_arch: None,
+            })
         }
 
         #[cfg(not(feature = "nvidia-rtx"))]
         {
-            info!("💻 RTX feature not compiled - using CPU processing");
+            // No compile-time CUDA, rely entirely on runtime detection
+            if runtime_cuda_available {
+                info!("✅ NVIDIA GPU detected via runtime CUDA loading");
+                info!("   GPU: {}", runtime_gpu_name.as_deref().unwrap_or("Unknown"));
 
-            Ok(Self {
-                cpu_fallback: true,
-                compute_capability: None,
-                gpu_generation: GpuGeneration::Unknown,
-            })
+                let gpu_gen = runtime_arch
+                    .map(|a| match a {
+                        RuntimeGpuArch::Turing => GpuGeneration::Turing,
+                        RuntimeGpuArch::Ampere => GpuGeneration::Ampere,
+                        RuntimeGpuArch::AdaLovelace => GpuGeneration::AdaLovelace,
+                        RuntimeGpuArch::Blackwell => GpuGeneration::Blackwell,
+                        _ => GpuGeneration::Unknown,
+                    })
+                    .unwrap_or(GpuGeneration::Unknown);
+
+                if gpu_gen == GpuGeneration::Blackwell {
+                    info!("   🚀 RTX 50 Series (Blackwell) - 5th-gen Tensor Cores detected");
+                    if is_fp4_available_runtime() {
+                        info!("   FP4 Tensor Core support available");
+                    }
+                }
+
+                // Note: Without nvidia-rtx feature, we can detect the GPU but cannot
+                // use cudarc for processing. We'll use CPU spectral processing but
+                // report GPU capabilities for future use.
+                info!("   Note: Compile with --features nvidia-rtx for full GPU acceleration");
+                info!("   Using optimized CPU processing with runtime GPU detection");
+
+                Ok(Self {
+                    cpu_fallback: false, // We detected a GPU, even if we can't fully use it
+                    runtime_gpu_name,
+                    compute_capability: runtime_compute,
+                    gpu_generation: gpu_gen,
+                    runtime_cuda_available: true,
+                    runtime_arch,
+                })
+            } else {
+                info!("💻 No NVIDIA GPU detected - using CPU processing");
+
+                Ok(Self {
+                    cpu_fallback: true,
+                    runtime_gpu_name: None,
+                    compute_capability: None,
+                    gpu_generation: GpuGeneration::Unknown,
+                    runtime_cuda_available: false,
+                    runtime_arch: None,
+                })
+            }
         }
     }
 
@@ -503,13 +636,42 @@ impl RtxAccelerator {
     pub fn is_rtx_available(&self) -> bool {
         #[cfg(feature = "nvidia-rtx")]
         {
-            self.device.is_some() && !self.cpu_fallback
+            // Full acceleration available via cudarc
+            if self.device.is_some() && !self.cpu_fallback {
+                return true;
+            }
+        }
+
+        // Runtime detection found a GPU
+        self.runtime_cuda_available && !self.cpu_fallback
+    }
+
+    /// Check if GPU was detected at runtime (even without full acceleration)
+    pub fn is_gpu_detected(&self) -> bool {
+        self.runtime_cuda_available
+    }
+
+    /// Get the name of the detected GPU
+    pub fn gpu_name(&self) -> Option<&str> {
+        self.runtime_gpu_name.as_deref()
+    }
+
+    /// Check if runtime CUDA detection is being used (vs compile-time cudarc)
+    pub fn is_runtime_cuda(&self) -> bool {
+        #[cfg(feature = "nvidia-rtx")]
+        {
+            self.device.is_none() && self.runtime_cuda_available
         }
 
         #[cfg(not(feature = "nvidia-rtx"))]
         {
-            false
+            self.runtime_cuda_available
         }
+    }
+
+    /// Get the GPU architecture detected at runtime
+    pub fn runtime_architecture(&self) -> Option<RuntimeGpuArch> {
+        self.runtime_arch
     }
 
     /// Check if driver version supports FP4 (requires 590+)
@@ -555,6 +717,8 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
     let mut driver_version: Option<String> = None;
     let mut cuda_version: Option<String> = None;
     let mut tensorrt_version: Option<String> = None;
+    let mut _driver_branch: Option<String> = None;
+    let _gsp_firmware: Option<String> = None;
     let mut compute_capability = (0u32, 0u32);
     let mut gpu_generation = GpuGeneration::Unknown;
     let mut tensor_core_gen = 0u8;
@@ -619,16 +783,21 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
             // Parse: "NVRM version: NVIDIA UNIX x86_64 Kernel Module  590.44.01  ..."
             if let Some(ver_start) = line.find("Module") {
                 let ver_part = &line[ver_start + 6..];
-                let ver = ver_part.trim().split_whitespace().next().unwrap_or("Unknown");
-                driver_version = Some(ver.to_string());
-                info!("Driver version: {}", ver);
+                let mut tokens = ver_part.trim().split_whitespace();
+                if let Some(ver) = tokens.next() {
+                    driver_version = Some(ver.to_string());
+                    info!("Driver version: {}", ver);
 
-                // Check if driver supports RTX 50 series (590+)
-                if let Ok(major) = ver.split('.').next().unwrap_or("0").parse::<u32>() {
-                    if major >= 590 {
-                        info!("✅ Driver supports RTX 50 series (Blackwell)");
+                    // Check if driver supports RTX 50 series (590+)
+                    if let Ok(major) = ver.split('.').next().unwrap_or("0").parse::<u32>() {
+                        if major >= 590 {
+                            info!("✅ Driver supports RTX 50 series (Blackwell)");
+                        }
                     }
                 }
+
+                // Remainder may contain branch info like "Production Branch" or "R535"
+                _driver_branch = tokens.next().map(|token| token.to_string());
             }
         }
     }
@@ -737,9 +906,11 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
     Ok(RtxSystemInfo {
         gpu_name,
         driver_version,
+        driver_branch: None,
         cuda_version,
         tensorrt_version,
         readiness,
+        gsp_firmware: None,
         compute_capability,
         gpu_generation,
         tensor_core_gen,

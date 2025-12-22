@@ -60,7 +60,10 @@ pub mod de_esser;
 pub mod parametric_eq;
 pub mod compressor;
 
-#[cfg(feature = "nvidia-rtx")]
+// Runtime CUDA detection (always available, no feature flag required)
+pub mod cuda_runtime;
+
+// RTX acceleration - always compiled, uses runtime detection when nvidia-rtx feature is disabled
 pub mod rtx_acceleration;
 
 #[cfg(feature = "pipewire-backend")]

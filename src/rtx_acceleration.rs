@@ -21,21 +21,38 @@ mod stubs {
         Unknown,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum DriverKind {
+        Proprietary,
+        Open,
+        Unknown,
+    }
+
+    impl Default for DriverKind {
+        fn default() -> Self {
+            Self::Unknown
+        }
+    }
+
     #[derive(Debug, Clone, Default)]
     pub struct RtxReadiness {
         pub driver_ok: bool,
+        pub driver_kind: DriverKind,
         pub cuda_ok: bool,
         pub tensorrt_ok: bool,
         pub fp4_ready: bool,
+        pub gsp_ready: bool,
     }
 
     #[derive(Debug, Clone)]
     pub struct RtxSystemInfo {
         pub gpu_name: Option<String>,
         pub driver_version: Option<String>,
+        pub driver_branch: Option<String>,
         pub cuda_version: Option<String>,
         pub tensorrt_version: Option<String>,
         pub readiness: RtxReadiness,
+        pub gsp_firmware: Option<String>,
         pub compute_capability: (u32, u32),
         pub gpu_generation: GpuGeneration,
         pub tensor_core_gen: u8,
@@ -82,9 +99,11 @@ mod stubs {
         Ok(RtxSystemInfo {
             gpu_name: None,
             driver_version: None,
+            driver_branch: None,
             cuda_version: None,
             tensorrt_version: None,
             readiness: RtxReadiness::default(),
+            gsp_firmware: None,
             compute_capability: (0, 0),
             gpu_generation: GpuGeneration::Unknown,
             tensor_core_gen: 0,

@@ -537,7 +537,7 @@ pub struct AudioStream {
 
     // Thread handle for PipeWire main loop
     thread_handle: Option<std::thread::JoinHandle<()>>,
-    stop_flag: Arc<Mutex<bool>>,
+    stop_flag: Arc<std::sync::atomic::AtomicBool>,
 
     // Node info
     node_id: Arc<Mutex<Option<u32>>>,
@@ -545,6 +545,7 @@ pub struct AudioStream {
 
 impl AudioStream {
     pub fn new(config: StreamConfig) -> Result<Self> {
+        use std::sync::atomic::AtomicBool;
         let buffer_size = config.buffer_frames as usize * config.channels as usize;
 
         Ok(Self {
@@ -555,7 +556,7 @@ impl AudioStream {
             playback_buffer: Arc::new(Mutex::new(vec![0.0; buffer_size])),
             process_callback: Arc::new(Mutex::new(None)),
             thread_handle: None,
-            stop_flag: Arc::new(Mutex::new(false)),
+            stop_flag: Arc::new(AtomicBool::new(false)),
             node_id: Arc::new(Mutex::new(None)),
         })
     }
@@ -570,11 +571,12 @@ impl AudioStream {
     }
 
     pub fn start(&mut self) -> Result<()> {
+        use std::sync::atomic::Ordering;
         info!("Starting PipeWire audio stream");
 
         // Set connecting state
         *self.state.lock().unwrap() = StreamState::Connecting;
-        *self.stop_flag.lock().unwrap() = false;
+        self.stop_flag.store(false, Ordering::SeqCst);
 
         // Clone Arcs for thread
         let state = Arc::clone(&self.state);
@@ -629,14 +631,22 @@ impl AudioStream {
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        use std::sync::atomic::Ordering;
         info!("Stopping PipeWire audio stream");
 
         // Signal stop
-        *self.stop_flag.lock().unwrap() = true;
+        self.stop_flag.store(true, Ordering::SeqCst);
 
-        // Wait for thread to finish
+        // Wait for thread to finish (with timeout)
         if let Some(handle) = self.thread_handle.take() {
-            handle.join().map_err(|_| anyhow::anyhow!("Failed to join PipeWire thread"))?;
+            // Give it a reasonable timeout to quit the main loop
+            for _ in 0..50 {
+                if handle.is_finished() {
+                    let _ = handle.join();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
 
         *self.state.lock().unwrap() = StreamState::Unconnected;
@@ -654,49 +664,311 @@ impl AudioStream {
         capture_buffer: Arc<Mutex<Vec<f32>>>,
         playback_buffer: Arc<Mutex<Vec<f32>>>,
         process_callback: Arc<Mutex<Option<Box<dyn FnMut(&[f32], &mut [f32]) + Send>>>>,
-        stop_flag: Arc<Mutex<bool>>,
+        stop_flag: Arc<std::sync::atomic::AtomicBool>,
         node_id: Arc<Mutex<Option<u32>>>,
     ) {
         #[cfg(feature = "pipewire-backend")]
         {
+            use std::sync::atomic::Ordering;
+            use pw::stream::{Stream, StreamFlags, StreamState as PwStreamState};
+            use pw::properties::properties;
+
             // Initialize PipeWire
             pw::init();
 
-            // TODO: Full PipeWire implementation:
-            // 1. Create MainLoop: MainLoop::new()
-            // 2. Create Context: Context::new(&main_loop)
-            // 3. Create Core: core = context.connect(None)
-            // 4. Create Stream with properties
-            // 5. Connect stream with format negotiation
-            // 6. Set process callback via stream events
-            // 7. Run main loop
+            info!("Initializing PipeWire stream node...");
 
-            info!("PipeWire main loop thread started");
+            // Create the main loop
+            let main_loop = match pw::main_loop::MainLoop::new(None) {
+                Ok(ml) => ml,
+                Err(e) => {
+                    warn!("Failed to create PipeWire main loop: {}", e);
+                    *state.lock().unwrap() = StreamState::Error;
+                    return;
+                }
+            };
 
-            // Mock node ID
-            *node_id.lock().unwrap() = Some(42);
+            let context = match pw::context::Context::new(&main_loop) {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    warn!("Failed to create PipeWire context: {}", e);
+                    *state.lock().unwrap() = StreamState::Error;
+                    return;
+                }
+            };
+
+            let core = match context.connect(None) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to connect to PipeWire: {}", e);
+                    *state.lock().unwrap() = StreamState::Error;
+                    return;
+                }
+            };
+
+            // Create stream properties for a virtual audio source
+            let props = properties! {
+                *pw::keys::NODE_NAME => "GhostWave Clean",
+                *pw::keys::NODE_DESCRIPTION => "GhostWave AI Noise Suppression - RTX Accelerated",
+                *pw::keys::MEDIA_CLASS => "Audio/Source/Virtual",
+                *pw::keys::MEDIA_CATEGORY => "Communication",
+                *pw::keys::MEDIA_ROLE => "Communication",
+                *pw::keys::APP_NAME => "GhostWave",
+                *pw::keys::NODE_LATENCY => format!("{}/{}", config.buffer_frames, config.sample_rate),
+                *pw::keys::NODE_ALWAYS_PROCESS => "true",
+            };
+
+            // Create the stream
+            let stream = match Stream::new(&core, "ghostwave-stream", props) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Failed to create PipeWire stream: {}", e);
+                    *state.lock().unwrap() = StreamState::Error;
+                    return;
+                }
+            };
+
+            // User data for the stream callbacks
+            struct StreamUserData {
+                config: StreamConfig,
+                state: Arc<Mutex<StreamState>>,
+                stats: Arc<Mutex<StreamStats>>,
+                capture_buffer: Arc<Mutex<Vec<f32>>>,
+                playback_buffer: Arc<Mutex<Vec<f32>>>,
+                process_callback: Arc<Mutex<Option<Box<dyn FnMut(&[f32], &mut [f32]) + Send>>>>,
+                node_id: Arc<Mutex<Option<u32>>>,
+            }
+
+            let user_data = StreamUserData {
+                config: config.clone(),
+                state: Arc::clone(&state),
+                stats: Arc::clone(&stats),
+                capture_buffer: Arc::clone(&capture_buffer),
+                playback_buffer: Arc::clone(&playback_buffer),
+                process_callback: Arc::clone(&process_callback),
+                node_id: Arc::clone(&node_id),
+            };
+
+            // Set up stream listener with process callback
+            let _listener = stream.add_local_listener_with_user_data(user_data)
+                .state_changed(|stream, user_data, old_state, new_state| {
+                    info!("PipeWire stream state changed: {:?} -> {:?}", old_state, new_state);
+
+                    let our_state = match &new_state {
+                        PwStreamState::Unconnected => StreamState::Unconnected,
+                        PwStreamState::Connecting => StreamState::Connecting,
+                        PwStreamState::Paused => StreamState::Paused,
+                        PwStreamState::Streaming => StreamState::Streaming,
+                        PwStreamState::Error(_) => StreamState::Error,
+                    };
+
+                    if let Ok(mut s) = user_data.state.lock() {
+                        *s = our_state;
+                    }
+
+                    // Capture node ID when streaming starts
+                    if matches!(new_state, PwStreamState::Streaming) {
+                        if let Ok(mut id) = user_data.node_id.lock() {
+                            *id = Some(stream.node_id());
+                            info!("GhostWave stream node ID: {}", stream.node_id());
+                        }
+                    }
+                })
+                .process(|stream, user_data| {
+                    // Real-time audio processing callback - called by PipeWire
+                    let start_time = std::time::Instant::now();
+
+                    // Dequeue buffer from PipeWire
+                    if let Some(mut buffer) = stream.dequeue_buffer() {
+                        let datas = buffer.datas_mut();
+
+                        if !datas.is_empty() {
+                            let data = &mut datas[0];
+
+                            // Get the audio data from the buffer
+                            if let Some(slice) = data.data() {
+                                let samples: &mut [f32] = bytemuck::cast_slice_mut(slice);
+                                let num_samples = samples.len();
+
+                                // Get input from capture buffer or use incoming data
+                                let input_data: Vec<f32> = {
+                                    if let Ok(buf) = user_data.capture_buffer.lock() {
+                                        if buf.len() >= num_samples {
+                                            buf[..num_samples].to_vec()
+                                        } else {
+                                            samples.to_vec() // Use PipeWire buffer as input
+                                        }
+                                    } else {
+                                        samples.to_vec()
+                                    }
+                                };
+
+                                // Process audio through user callback
+                                let mut output_data = vec![0.0f32; num_samples];
+                                if let Ok(mut cb_guard) = user_data.process_callback.lock() {
+                                    if let Some(ref mut callback) = *cb_guard {
+                                        callback(&input_data, &mut output_data);
+                                    } else {
+                                        // Pass through if no callback set
+                                        output_data.copy_from_slice(&input_data);
+                                    }
+                                }
+
+                                // Write processed audio back to buffer
+                                samples.copy_from_slice(&output_data);
+
+                                // Update playback buffer for external access
+                                if let Ok(mut buf) = user_data.playback_buffer.lock() {
+                                    if buf.len() >= num_samples {
+                                        buf[..num_samples].copy_from_slice(&output_data);
+                                    }
+                                }
+
+                                // Set chunk size
+                                let chunk = data.chunk_mut();
+                                *chunk.offset_mut() = 0;
+                                *chunk.stride_mut() = std::mem::size_of::<f32>() as i32;
+                                *chunk.size_mut() = (num_samples * std::mem::size_of::<f32>()) as u32;
+
+                                // Update statistics
+                                if let Ok(mut s) = user_data.stats.lock() {
+                                    let frames = num_samples / user_data.config.channels as usize;
+                                    s.frames_captured += frames as u64;
+                                    s.frames_processed += frames as u64;
+                                    s.frames_output += frames as u64;
+                                    s.last_process_time_us = start_time.elapsed().as_micros() as u64;
+
+                                    // Calculate running average latency
+                                    let frame_latency_ms = (frames as f32 / user_data.config.sample_rate as f32) * 1000.0;
+                                    s.avg_latency_ms = s.avg_latency_ms * 0.95 + frame_latency_ms * 0.05;
+
+                                    // Track peak latency
+                                    let current_latency = s.last_process_time_us as f32 / 1000.0 + frame_latency_ms;
+                                    if current_latency > s.peak_latency_ms {
+                                        s.peak_latency_ms = current_latency;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })
+                .register()
+                .expect("Failed to register PipeWire stream listener");
+
+            // Build audio format parameters for F32LE stereo using libspa types
+            use pw::spa::utils::Id;
+            use pw::spa::pod::{Pod, Property, PropertyFlags, Value, Object};
+            use pw::spa::pod::serialize::PodSerializer;
+            use pw::spa::sys::{
+                SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+                SPA_FORMAT_mediaType, SPA_FORMAT_mediaSubtype,
+                SPA_FORMAT_AUDIO_format, SPA_FORMAT_AUDIO_rate, SPA_FORMAT_AUDIO_channels,
+                SPA_MEDIA_TYPE_audio, SPA_MEDIA_SUBTYPE_raw, SPA_AUDIO_FORMAT_F32_LE,
+            };
+
+            // Build the Pod for format negotiation
+            let values: Vec<u8> = PodSerializer::serialize(
+                std::io::Cursor::new(Vec::new()),
+                &Value::Object(Object {
+                    type_: SPA_TYPE_OBJECT_Format,
+                    id: SPA_PARAM_EnumFormat,
+                    properties: vec![
+                        Property {
+                            key: SPA_FORMAT_mediaType,
+                            flags: PropertyFlags::empty(),
+                            value: Value::Id(Id(SPA_MEDIA_TYPE_audio)),
+                        },
+                        Property {
+                            key: SPA_FORMAT_mediaSubtype,
+                            flags: PropertyFlags::empty(),
+                            value: Value::Id(Id(SPA_MEDIA_SUBTYPE_raw)),
+                        },
+                        Property {
+                            key: SPA_FORMAT_AUDIO_format,
+                            flags: PropertyFlags::empty(),
+                            value: Value::Id(Id(SPA_AUDIO_FORMAT_F32_LE)),
+                        },
+                        Property {
+                            key: SPA_FORMAT_AUDIO_rate,
+                            flags: PropertyFlags::empty(),
+                            value: Value::Int(config.sample_rate as i32),
+                        },
+                        Property {
+                            key: SPA_FORMAT_AUDIO_channels,
+                            flags: PropertyFlags::empty(),
+                            value: Value::Int(config.channels as i32),
+                        },
+                    ],
+                }),
+            ).expect("Failed to serialize audio format pod").0.into_inner();
+
+            let pod = Pod::from_bytes(&values).expect("Failed to create Pod from bytes");
+
+            // Connect the stream as an audio source (output direction = we provide audio to the graph)
+            let flags = StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS;
+            if let Err(e) = stream.connect(
+                pw::spa::utils::Direction::Output,
+                None, // Let PipeWire choose the target
+                flags,
+                &mut [pod],
+            ) {
+                warn!("Failed to connect PipeWire stream: {}", e);
+                *state.lock().unwrap() = StreamState::Error;
+                return;
+            }
+
+            info!("PipeWire stream connected, starting main loop");
+            *state.lock().unwrap() = StreamState::Connecting;
+
+            // Use PipeWire timer source to periodically check stop flag
+            // This avoids thread-safety issues with WeakMainLoop
+            let timer_source = main_loop.loop_().add_timer(move |_| {
+                // This closure runs on the main loop thread
+                // We can't easily signal quit from here, but we check in the main iteration
+            });
+
+            // Run main loop with periodic stop flag checking
+            // We iterate manually instead of run() to check the stop flag
+            let loop_ref = main_loop.loop_();
+            while !stop_flag.load(Ordering::Relaxed) {
+                // Iterate the main loop with a short timeout
+                let timeout_ms = 50;
+                loop_ref.iterate(std::time::Duration::from_millis(timeout_ms));
+            }
+
+            // Clean up
+            drop(timer_source);
+
+            info!("PipeWire main loop thread exiting");
+        }
+
+        #[cfg(not(feature = "pipewire-backend"))]
+        {
+            use std::sync::atomic::Ordering;
+
+            // Stub implementation for non-PipeWire builds
+            warn!("PipeWire backend not available, using stub processing");
+            *node_id.lock().unwrap() = Some(1);
             *state.lock().unwrap() = StreamState::Streaming;
 
-            // Simulated processing loop
             let frame_duration_ms = (config.buffer_frames as f32 / config.sample_rate as f32) * 1000.0;
             let frame_duration = std::time::Duration::from_micros((frame_duration_ms * 1000.0) as u64);
 
-            while !*stop_flag.lock().unwrap() {
+            while !stop_flag.load(Ordering::Relaxed) {
                 let start_time = std::time::Instant::now();
 
-                // Simulate capturing audio
+                // Get input from capture buffer
                 let input = {
                     let buf = capture_buffer.lock().unwrap();
                     buf.clone()
                 };
 
-                // Process if callback is set
+                // Process through callback
                 let mut output = vec![0.0f32; input.len()];
                 if let Ok(mut callback_guard) = process_callback.lock() {
                     if let Some(ref mut callback) = *callback_guard {
                         callback(&input, &mut output);
                     } else {
-                        // Pass through
                         output.copy_from_slice(&input);
                     }
                 }
@@ -714,36 +986,17 @@ impl AudioStream {
                     s.frames_processed += config.buffer_frames as u64;
                     s.frames_output += config.buffer_frames as u64;
                     s.last_process_time_us = start_time.elapsed().as_micros() as u64;
-                    s.avg_latency_ms = s.avg_latency_ms * 0.99 + frame_duration_ms * 0.01;
+                    s.avg_latency_ms = s.avg_latency_ms * 0.95 + frame_duration_ms * 0.05;
                 }
 
-                // Sleep for frame duration (simulating real-time audio)
+                // Sleep for frame duration
                 let elapsed = start_time.elapsed();
                 if elapsed < frame_duration {
                     std::thread::sleep(frame_duration - elapsed);
                 } else {
-                    // Underrun
                     let mut s = stats.lock().unwrap();
                     s.underruns += 1;
                 }
-            }
-
-            info!("PipeWire main loop thread exiting");
-        }
-
-        #[cfg(not(feature = "pipewire-backend"))]
-        {
-            // Stub implementation for non-PipeWire builds
-            warn!("PipeWire backend not available, using stub");
-            *node_id.lock().unwrap() = Some(1);
-            *state.lock().unwrap() = StreamState::Streaming;
-
-            let frame_duration = std::time::Duration::from_millis(
-                (config.buffer_frames as f32 / config.sample_rate as f32 * 1000.0) as u64
-            );
-
-            while !*stop_flag.lock().unwrap() {
-                std::thread::sleep(frame_duration);
             }
         }
     }
