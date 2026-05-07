@@ -81,9 +81,7 @@ impl FrameFormat {
 
     /// Check if buffer size is valid (power of 2 between 32 and 4096)
     pub fn is_valid_buffer_size(buffer_size: usize) -> bool {
-        buffer_size >= 32 &&
-        buffer_size <= 4096 &&
-        buffer_size.is_power_of_two()
+        (32..=4096).contains(&buffer_size) && buffer_size.is_power_of_two()
     }
 
     /// Get all supported sample rates
@@ -309,9 +307,9 @@ impl AudioBuffer {
                                      samples.len(), self.format.buffer_size));
         }
 
-        for frame in 0..self.format.buffer_size {
+        for (frame, &sample) in samples.iter().enumerate().take(self.format.buffer_size) {
             let sample_idx = frame * self.format.channels as usize + channel as usize;
-            self.data[sample_idx] = samples[frame];
+            self.data[sample_idx] = sample;
         }
         Ok(())
     }

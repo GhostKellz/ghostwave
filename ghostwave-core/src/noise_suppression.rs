@@ -93,12 +93,8 @@ impl NoiseProcessor {
 
     pub fn get_processing_mode(&self) -> String {
         #[cfg(feature = "nvidia-rtx")]
-        {
-            if let Some(ref rtx) = self.rtx_accelerator {
-                if rtx.is_rtx_available() {
-                    return "RTX GPU + CPU Gate".to_string();
-                }
-            }
+        if self.rtx_accelerator.as_ref().is_some_and(|rtx| rtx.is_rtx_available()) {
+            return "RTX GPU + CPU Gate".to_string();
         }
         "CPU Only".to_string()
     }

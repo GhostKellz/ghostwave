@@ -21,9 +21,10 @@ use std::f32::consts::PI;
 use tracing::debug;
 
 /// Detection mode for level measurement
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetectionMode {
     /// Peak detection (fast, responsive)
+    #[default]
     Peak,
     /// RMS detection (smoother, more musical)
     Rms,
@@ -31,25 +32,14 @@ pub enum DetectionMode {
     TruePeak,
 }
 
-impl Default for DetectionMode {
-    fn default() -> Self {
-        Self::Peak
-    }
-}
-
 /// Knee type for compression curve
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KneeType {
     /// Hard knee (abrupt transition)
     Hard,
     /// Soft knee (gradual transition)
+    #[default]
     Soft,
-}
-
-impl Default for KneeType {
-    fn default() -> Self {
-        Self::Soft
-    }
 }
 
 /// Compressor configuration
@@ -228,9 +218,8 @@ impl RmsCalculator {
 
         // Remove old sample
         if self.buffer.len() >= self.window_size {
-            if let Some(old) = self.buffer.pop_front() {
-                self.sum_squares -= old;
-            }
+            let old = self.buffer.pop_front().unwrap_or(0.0);
+            self.sum_squares -= old;
         }
 
         // Add new sample

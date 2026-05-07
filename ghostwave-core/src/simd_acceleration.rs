@@ -115,8 +115,8 @@ pub struct SimdProcessor {
     vector_width: usize,
 }
 
-impl SimdProcessor {
-    pub fn new() -> Self {
+impl Default for SimdProcessor {
+    fn default() -> Self {
         let capabilities = SimdCapabilities::detect();
         let instruction_set = capabilities.best_instruction_set();
         let vector_width = capabilities.optimal_vector_width();
@@ -128,6 +128,12 @@ impl SimdProcessor {
             instruction_set,
             vector_width,
         }
+    }
+}
+
+impl SimdProcessor {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Vectorized audio buffer operations
@@ -338,8 +344,8 @@ impl SimdProcessor {
 
     /// Scalar fallback processing
     fn process_scalar(&self, input: &[f32], output: &mut [f32], operation: BufferOperation) -> Result<()> {
-        for i in 0..input.len() {
-            self.process_sample_scalar(input[i], &mut output[i], operation)?;
+        for (inp, out) in input.iter().zip(output.iter_mut()) {
+            self.process_sample_scalar(*inp, out, operation)?;
         }
         Ok(())
     }
@@ -399,14 +405,14 @@ impl SimdProcessor {
     unsafe fn convolve_avx2(&self, input: &[f32], impulse: &[f32], output: &mut [f32]) -> Result<()> {
         output.fill(0.0);
 
-        for i in 0..input.len() {
-            let impulse_len = impulse.len();
-            let vector_len = impulse_len - (impulse_len % 8);
+        let impulse_len = impulse.len();
+        let vector_len = impulse_len - (impulse_len % 8);
 
+        for (i, &inp) in input.iter().enumerate() {
             // Vectorized multiply-accumulate
             for j in (0..vector_len).step_by(8) {
                 unsafe {
-                    let input_val = _mm256_set1_ps(input[i]);
+                    let input_val = _mm256_set1_ps(inp);
                     let impulse_vec = _mm256_loadu_ps(impulse.as_ptr().add(j));
                     let output_vec = _mm256_loadu_ps(output.as_ptr().add(i + j));
                     let result = _mm256_fmadd_ps(input_val, impulse_vec, output_vec);
@@ -415,8 +421,8 @@ impl SimdProcessor {
             }
 
             // Handle remaining impulse samples
-            for j in vector_len..impulse_len {
-                output[i + j] += input[i] * impulse[j];
+            for (j, &imp) in impulse.iter().enumerate().skip(vector_len) {
+                output[i + j] += inp * imp;
             }
         }
 
@@ -426,9 +432,9 @@ impl SimdProcessor {
     fn convolve_scalar(&self, input: &[f32], impulse: &[f32], output: &mut [f32]) -> Result<()> {
         output.fill(0.0);
 
-        for i in 0..input.len() {
-            for j in 0..impulse.len() {
-                output[i + j] += input[i] * impulse[j];
+        for (i, &inp) in input.iter().enumerate() {
+            for (j, &imp) in impulse.iter().enumerate() {
+                output[i + j] += inp * imp;
             }
         }
 

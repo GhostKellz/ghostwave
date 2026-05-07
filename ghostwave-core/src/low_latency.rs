@@ -287,7 +287,7 @@ impl RealTimeScheduler {
         }
 
         // Clamp to reasonable bounds
-        buffer_size = buffer_size.max(32).min(2048);
+        buffer_size = buffer_size.clamp(32, 2048);
 
         info!("Optimal buffer size for {}Hz @ {}ms latency: {} frames",
               sample_rate, target_latency_ms, buffer_size);

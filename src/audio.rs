@@ -42,7 +42,7 @@ impl AudioProcessor {
     pub fn get_stream_config(&self) -> StreamConfig {
         StreamConfig {
             channels: self.config.audio.channels.into(),
-            sample_rate: cpal::SampleRate(self.config.audio.sample_rate),
+            sample_rate: self.config.audio.sample_rate,
             buffer_size: cpal::BufferSize::Fixed(self.config.audio.buffer_size),
         }
     }
@@ -69,8 +69,8 @@ pub async fn run_standalone(config: Config) -> Result<()> {
     let processor = Arc::new(AudioProcessor::new(config)?);
     let stream_config = processor.get_stream_config();
 
-    info!("Input device: {:?}", input_device.name());
-    info!("Output device: {:?}", output_device.name());
+    info!("Input device: {:?}", input_device.description().map(|d| d.name().to_string()));
+    info!("Output device: {:?}", output_device.description().map(|d| d.name().to_string()));
     info!("Stream config: {:?}", stream_config);
 
     let input_stream = input_device.build_input_stream(
@@ -113,12 +113,12 @@ pub async fn run_standalone(config: Config) -> Result<()> {
 
 fn find_device_by_name(host: &cpal::Host, name: &str) -> Result<Device> {
     for device in host.input_devices()? {
-        if device.name()?.contains(name) {
+        if device.description()?.name().contains(name) {
             return Ok(device);
         }
     }
     for device in host.output_devices()? {
-        if device.name()?.contains(name) {
+        if device.description()?.name().contains(name) {
             return Ok(device);
         }
     }

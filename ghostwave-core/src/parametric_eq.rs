@@ -24,9 +24,10 @@ use std::f32::consts::PI;
 use tracing::{debug, info};
 
 /// EQ band filter type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterType {
     /// Parametric peak/bell filter
+    #[default]
     Peak,
     /// Low shelf filter
     LowShelf,
@@ -40,12 +41,6 @@ pub enum FilterType {
     Notch,
     /// Bandpass filter
     Bandpass,
-}
-
-impl Default for FilterType {
-    fn default() -> Self {
-        Self::Peak
-    }
 }
 
 /// Single EQ band configuration
@@ -508,7 +503,7 @@ pub struct ParametricEq {
 impl ParametricEq {
     /// Create a new Parametric EQ
     pub fn new(config: ParametricEqConfig, sample_rate: f32) -> Self {
-        let bands = std::array::from_fn(|i| EqBand::new(config.bands[i].clone(), sample_rate));
+        let bands = std::array::from_fn(|i| EqBand::new(config.bands[i], sample_rate));
 
         let input_gain_linear = 10.0_f32.powf(config.input_gain_db / 20.0);
         let output_gain_linear = 10.0_f32.powf(config.output_gain_db / 20.0);
@@ -566,7 +561,7 @@ impl ParametricEq {
         self.output_gain_linear = 10.0_f32.powf(config.output_gain_db / 20.0);
 
         for (i, band) in self.bands.iter_mut().enumerate() {
-            band.update_config(config.bands[i].clone());
+            band.update_config(config.bands[i]);
         }
 
         self.config = config;
@@ -575,7 +570,7 @@ impl ParametricEq {
     /// Update a single band
     pub fn set_band(&mut self, band_index: usize, config: EqBandConfig) {
         if band_index < NUM_BANDS {
-            self.bands[band_index].update_config(config.clone());
+            self.bands[band_index].update_config(config);
             self.config.bands[band_index] = config;
         }
     }
@@ -584,7 +579,7 @@ impl ParametricEq {
     pub fn set_band_frequency(&mut self, band_index: usize, frequency_hz: f32) {
         if band_index < NUM_BANDS {
             self.config.bands[band_index].frequency_hz = frequency_hz.clamp(20.0, 20000.0);
-            self.bands[band_index].update_config(self.config.bands[band_index].clone());
+            self.bands[band_index].update_config(self.config.bands[band_index]);
         }
     }
 
@@ -592,7 +587,7 @@ impl ParametricEq {
     pub fn set_band_gain(&mut self, band_index: usize, gain_db: f32) {
         if band_index < NUM_BANDS {
             self.config.bands[band_index].gain_db = gain_db.clamp(-24.0, 24.0);
-            self.bands[band_index].update_config(self.config.bands[band_index].clone());
+            self.bands[band_index].update_config(self.config.bands[band_index]);
         }
     }
 
@@ -600,7 +595,7 @@ impl ParametricEq {
     pub fn set_band_q(&mut self, band_index: usize, q: f32) {
         if band_index < NUM_BANDS {
             self.config.bands[band_index].q = q.clamp(0.1, 18.0);
-            self.bands[band_index].update_config(self.config.bands[band_index].clone());
+            self.bands[band_index].update_config(self.config.bands[band_index]);
         }
     }
 
@@ -608,7 +603,7 @@ impl ParametricEq {
     pub fn set_band_enabled(&mut self, band_index: usize, enabled: bool) {
         if band_index < NUM_BANDS {
             self.config.bands[band_index].enabled = enabled;
-            self.bands[band_index].update_config(self.config.bands[band_index].clone());
+            self.bands[band_index].update_config(self.config.bands[band_index]);
         }
     }
 

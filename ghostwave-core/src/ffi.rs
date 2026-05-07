@@ -62,7 +62,9 @@ impl GhostWaveHandle {
         }
     }
 
-    #[allow(dead_code)] // Reserved for future mutable operations API
+    /// Get mutable access to the processor.
+    /// This is safe for FFI because the handle owns the pointer and we control access.
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_processor_mut(&self) -> Option<&mut GhostWaveProcessor> {
         if self.is_null() {
             None
@@ -129,7 +131,7 @@ pub struct GhostWaveStats {
 /// # Returns
 /// Error code (0 = success)
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_create(
+pub unsafe extern "C" fn ghostwave_create(
     handle_out: *mut GhostWaveHandle,
     sample_rate: u32,
     channels: u32,
@@ -150,7 +152,7 @@ pub extern "C" fn ghostwave_create(
             });
         }
 
-        if channels < 1 || channels > 2 {
+        if !(1..=2).contains(&channels) {
             return Err(GhostWaveError::InvalidConfiguration {
                 field: "channels".to_string(),
                 value: channels.to_string(),
@@ -158,7 +160,7 @@ pub extern "C" fn ghostwave_create(
             });
         }
 
-        if buffer_size < 32 || buffer_size > 4096 || !buffer_size.is_power_of_two() {
+        if !(32..=4096).contains(&buffer_size) || !buffer_size.is_power_of_two() {
             return Err(GhostWaveError::UnsupportedBufferSize {
                 size: buffer_size as usize,
                 min: 32,
@@ -204,8 +206,11 @@ pub extern "C" fn ghostwave_create(
 }
 
 /// Create processor with a specific profile
+///
+/// # Safety
+/// - `handle_out` must be a valid pointer
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_create_with_profile(
+pub unsafe extern "C" fn ghostwave_create_with_profile(
     handle_out: *mut GhostWaveHandle,
     sample_rate: u32,
     channels: u32,
@@ -295,7 +300,7 @@ pub extern "C" fn ghostwave_destroy(handle: GhostWaveHandle) {
 /// # Returns
 /// Error code (0 = success)
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_process(
+pub unsafe extern "C" fn ghostwave_process(
     handle: GhostWaveHandle,
     input: *const f32,
     output: *mut f32,
@@ -349,7 +354,7 @@ pub extern "C" fn ghostwave_process(
 /// # Safety
 /// Same as `ghostwave_process`, but `buffer` is both input and output
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_process_inplace(
+pub unsafe extern "C" fn ghostwave_process_inplace(
     handle: GhostWaveHandle,
     buffer: *mut f32,
     frames: usize,
@@ -406,7 +411,7 @@ pub extern "C" fn ghostwave_set_noise_strength(handle: GhostWaveHandle, strength
     if handle.is_null() {
         return CError::from_error(&GhostWaveError::FfiInvalidHandle);
     }
-    if strength < 0.0 || strength > 1.0 {
+    if !(0.0..=1.0).contains(&strength) {
         return CError::from_error(&GhostWaveError::InvalidConfiguration {
             field: "strength".to_string(),
             value: strength.to_string(),
@@ -421,13 +426,39 @@ pub extern "C" fn ghostwave_set_noise_strength(handle: GhostWaveHandle, strength
 
 /// Enable or disable noise suppression
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_set_enabled(handle: GhostWaveHandle, _enabled: bool) -> CError {
+pub extern "C" fn ghostwave_set_enabled(handle: GhostWaveHandle, enabled: bool) -> CError {
     if handle.is_null() {
         return CError::from_error(&GhostWaveError::FfiInvalidHandle);
     }
 
-    // TODO: Implement enable/disable via processor state
-    CError::success()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        unsafe {
+            let processor = handle.as_processor_mut().ok_or(GhostWaveError::FfiInvalidHandle)?;
+            processor.set_enabled(enabled);
+            Ok(())
+        }
+    }));
+
+    match result {
+        Ok(Ok(())) => CError::success(),
+        Ok(Err(e)) => CError::from_error(&e),
+        Err(_) => CError::from_error(&GhostWaveError::FfiPanic {
+            message: "Panic setting enabled state".to_string(),
+        }),
+    }
+}
+
+/// Check if noise suppression is enabled
+#[unsafe(no_mangle)]
+pub extern "C" fn ghostwave_is_enabled(handle: GhostWaveHandle) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    catch_unwind(AssertUnwindSafe(|| {
+        unsafe { handle.as_processor().map(|p| p.is_enabled()).unwrap_or(false) }
+    }))
+    .unwrap_or(false)
 }
 
 // ============================================================================
@@ -435,8 +466,11 @@ pub extern "C" fn ghostwave_set_enabled(handle: GhostWaveHandle, _enabled: bool)
 // ============================================================================
 
 /// Get GPU acceleration status
+///
+/// # Safety
+/// - `info_out` must be a valid pointer
 #[unsafe(no_mangle)]
-pub extern "C" fn ghostwave_get_gpu_info(handle: GhostWaveHandle, info_out: *mut GhostWaveGpuInfo) -> CError {
+pub unsafe extern "C" fn ghostwave_get_gpu_info(handle: GhostWaveHandle, info_out: *mut GhostWaveGpuInfo) -> CError {
     if handle.is_null() {
         return CError::from_error(&GhostWaveError::FfiInvalidHandle);
     }
@@ -558,7 +592,8 @@ mod tests {
     #[test]
     fn test_ffi_create_destroy() {
         let mut handle = GhostWaveHandle::null();
-        let err = ghostwave_create(&mut handle, 48000, 1, 256);
+        // SAFETY: handle is a valid pointer
+        let err = unsafe { ghostwave_create(&mut handle, 48000, 1, 256) };
         assert_eq!(err.code, 0);
         assert!(!handle.is_null());
 
@@ -570,24 +605,28 @@ mod tests {
         let mut handle = GhostWaveHandle::null();
 
         // Invalid sample rate
-        let err = ghostwave_create(&mut handle, 12345, 1, 256);
+        // SAFETY: handle is a valid pointer
+        let err = unsafe { ghostwave_create(&mut handle, 12345, 1, 256) };
         assert_ne!(err.code, 0);
 
         // Invalid buffer size
-        let err = ghostwave_create(&mut handle, 48000, 1, 100); // Not power of 2
+        // SAFETY: handle is a valid pointer
+        let err = unsafe { ghostwave_create(&mut handle, 48000, 1, 100) }; // Not power of 2
         assert_ne!(err.code, 0);
     }
 
     #[test]
     fn test_ffi_process() {
         let mut handle = GhostWaveHandle::null();
-        let err = ghostwave_create(&mut handle, 48000, 1, 256);
+        // SAFETY: handle is a valid pointer
+        let err = unsafe { ghostwave_create(&mut handle, 48000, 1, 256) };
         assert_eq!(err.code, 0);
 
         let input = vec![0.1f32; 256];
         let mut output = vec![0.0f32; 256];
 
-        let err = ghostwave_process(handle, input.as_ptr(), output.as_mut_ptr(), 256);
+        // SAFETY: input, output are valid pointers with correct length
+        let err = unsafe { ghostwave_process(handle, input.as_ptr(), output.as_mut_ptr(), 256) };
         assert_eq!(err.code, 0);
 
         ghostwave_destroy(handle);
@@ -600,7 +639,7 @@ mod tests {
 
         unsafe {
             let version_str = CStr::from_ptr(version).to_str().unwrap();
-            assert!(version_str.contains("0.2"));
+            assert!(version_str.contains("0.3"));
         }
     }
 }

@@ -1,0 +1,77 @@
+# Maintainer: Christopher Kelley <ckelley@ghostkellz.sh>
+pkgname=ghostwave
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Real-time audio processing with DSP pipeline and PipeWire integration for Linux"
+arch=('x86_64')
+url="https://github.com/ghostkellz/ghostwave"
+license=('MIT')
+depends=(
+    'pipewire'
+    'pipewire-pulse'
+    'wireplumber'
+    'alsa-lib'
+)
+makedepends=(
+    'rust'
+    'cargo'
+    'clang'
+    'pipewire'
+    'jack2'
+    'alsa-lib'
+)
+optdepends=(
+    'jack2: JACK audio backend support'
+    'nvidia-open: NVIDIA open kernel modules for RTX acceleration'
+    'cuda: NVIDIA CUDA runtime for GPU acceleration'
+    'phantomlink: Professional audio mixing integration'
+    'nvcontrol: NVIDIA GPU management'
+)
+provides=('ghostwave')
+conflicts=('ghostwave-git')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/ghostkellz/$pkgname/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+
+    cargo build --release --locked
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    # Binary
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+
+    # Systemd user service
+    install -Dm644 "systemd/ghostwave.user.service" \
+        "$pkgdir/usr/lib/systemd/user/ghostwave.service"
+
+    # Default configuration
+    install -Dm644 "examples/config.toml" \
+        "$pkgdir/etc/ghostwave/config.toml.example"
+
+    # Documentation
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # License
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# vim:set ts=4 sw=4 et:

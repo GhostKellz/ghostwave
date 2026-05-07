@@ -1,0 +1,66 @@
+name: Feature Request
+description: Suggest a new feature or improvement for GhostWave
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees:
+  - ghostkellz
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for GhostWave? Describe it below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the feature you'd like to see.
+      placeholder: What should GhostWave be able to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Why is this feature needed? What problem does it solve?
+      placeholder: I'm trying to... and currently I have to...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of GhostWave does this affect?
+      options:
+        - Noise suppression / AI denoising
+        - Audio backend (PipeWire, ALSA, JACK)
+        - GPU acceleration (CUDA, TensorRT)
+        - DSP pipeline
+        - CLI / UX
+        - IPC / API
+        - PhantomLink integration
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this to you?
+      options:
+        - Nice to have
+        - Would improve my workflow
+        - Blocking my use case
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you tried any workarounds or alternative approaches?
+    validations:
+      required: false

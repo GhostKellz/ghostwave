@@ -257,7 +257,9 @@ fn test_latency_frames() {
 
     let latency = processor.latency_frames();
     assert!(latency > 0, "Latency should be > 0");
-    assert!(latency <= 256, "Latency should not exceed buffer size");
+    // At 48kHz with nnnoiseless backend: 480 (RNNoise frame) + 240 (limiter lookahead) = 720
+    // Latency can exceed buffer size — it represents algorithmic delay, not buffer constraint
+    assert!(latency <= 2048, "Latency should be reasonable (< 2048 samples)");
 }
 
 /// Test processing mode reporting

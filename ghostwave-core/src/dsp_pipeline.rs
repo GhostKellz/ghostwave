@@ -8,8 +8,18 @@
 
 use anyhow::Result;
 use crate::frame_format::{FrameFormat, Sample};
+use crate::nnnoiseless_denoiser::NnnoiseDenoiser;
 use crate::processor::{ProcessingProfile, ParamValue};
 use std::collections::VecDeque;
+
+/// Which noise reduction backend the pipeline uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenoiserBackend {
+    /// Simple time-domain spectral subtraction (works at any sample rate).
+    Spectral,
+    /// nnnoiseless RNNoise (real neural network, 48kHz only).
+    Nnnoiseless,
+}
 
 /// High-pass filter to remove low-frequency noise and rumble
 #[derive(Debug)]
@@ -129,12 +139,9 @@ impl VoiceActivityDetector {
             return 0.0;
         }
 
-        let mut crossings = 0;
-        for i in 1..buffer.len() {
-            if (buffer[i] >= 0.0) != (buffer[i-1] >= 0.0) {
-                crossings += 1;
-            }
-        }
+        let crossings = buffer.windows(2)
+            .filter(|w| (w[1] >= 0.0) != (w[0] >= 0.0))
+            .count();
 
         crossings as f32 / (buffer.len() - 1) as f32
     }
@@ -328,8 +335,7 @@ impl SoftLimiter {
         } else {
             // Smooth transition in knee region
             let knee_ratio = (input_abs - knee_start) / self.knee_width;
-            let knee_gain = 1.0 - knee_ratio * (1.0 - self.threshold / input_abs);
-            knee_gain
+            1.0 - knee_ratio * (1.0 - self.threshold / input_abs)
         };
 
         input * gain
@@ -354,6 +360,8 @@ pub struct DspPipeline {
     highpass_filter: HighPassFilter,
     voice_detector: VoiceActivityDetector,
     spectral_denoiser: SpectralDenoiser,
+    nnnoise_denoiser: Option<NnnoiseDenoiser>,
+    denoiser_backend: DenoiserBackend,
     expander_gate: ExpanderGate,
     soft_limiter: SoftLimiter,
 
@@ -367,12 +375,21 @@ impl DspPipeline {
         let sample_rate = format.sample_rate as f32;
         let buffer_size = format.buffer_size;
 
+        // Use nnnoiseless for 48kHz (its only supported rate), spectral fallback otherwise
+        let (nnnoise_denoiser, denoiser_backend) = if format.sample_rate == 48000 {
+            (Some(NnnoiseDenoiser::new()), DenoiserBackend::Nnnoiseless)
+        } else {
+            (None, DenoiserBackend::Spectral)
+        };
+
         let mut pipeline = Self {
             format,
             profile,
             highpass_filter: HighPassFilter::new(80.0, sample_rate),
             voice_detector: VoiceActivityDetector::new(sample_rate, buffer_size),
             spectral_denoiser: SpectralDenoiser::new(sample_rate, buffer_size),
+            nnnoise_denoiser,
+            denoiser_backend,
             expander_gate: ExpanderGate::new(sample_rate),
             soft_limiter: SoftLimiter::new(sample_rate),
             enabled: true,
@@ -390,6 +407,7 @@ impl DspPipeline {
                 self.highpass_filter.set_cutoff(80.0);
                 self.voice_detector.set_sensitivity(0.5);
                 self.spectral_denoiser.set_strength(0.7);
+                if let Some(ref mut d) = self.nnnoise_denoiser { d.set_strength(0.7); }
                 self.expander_gate.set_threshold(-45.0);
                 self.expander_gate.set_ratio(3.0);
                 self.soft_limiter.set_threshold(0.95);
@@ -397,21 +415,23 @@ impl DspPipeline {
             }
             ProcessingProfile::Streaming => {
                 self.highpass_filter.set_cutoff(100.0);
-                self.voice_detector.set_sensitivity(0.3); // More aggressive
+                self.voice_detector.set_sensitivity(0.3);
                 self.spectral_denoiser.set_strength(0.85);
+                if let Some(ref mut d) = self.nnnoise_denoiser { d.set_strength(0.85); }
                 self.expander_gate.set_threshold(-40.0);
                 self.expander_gate.set_ratio(4.0);
                 self.soft_limiter.set_threshold(0.90);
                 self.soft_limiter.set_makeup_gain(1.0);
             }
             ProcessingProfile::Studio => {
-                self.highpass_filter.set_cutoff(40.0); // Less aggressive
+                self.highpass_filter.set_cutoff(40.0);
                 self.voice_detector.set_sensitivity(0.7);
-                self.spectral_denoiser.set_strength(0.3); // Minimal processing
+                self.spectral_denoiser.set_strength(0.3);
+                if let Some(ref mut d) = self.nnnoise_denoiser { d.set_strength(0.3); }
                 self.expander_gate.set_threshold(-60.0);
                 self.expander_gate.set_ratio(2.0);
                 self.soft_limiter.set_threshold(0.98);
-                self.soft_limiter.set_makeup_gain(-1.0); // Slight reduction
+                self.soft_limiter.set_makeup_gain(-1.0);
             }
         }
     }
@@ -442,8 +462,17 @@ impl DspPipeline {
             self.voice_detector.process(buffer)
         };
 
-        // Stage 3: Spectral noise reduction
-        self.spectral_denoiser.process(buffer, voice_active)?;
+        // Stage 3: Noise reduction (nnnoiseless RNNoise when available, spectral fallback)
+        match self.denoiser_backend {
+            DenoiserBackend::Nnnoiseless => {
+                if let Some(ref mut denoiser) = self.nnnoise_denoiser {
+                    denoiser.process(buffer, voice_active)?;
+                }
+            }
+            DenoiserBackend::Spectral => {
+                self.spectral_denoiser.process(buffer, voice_active)?;
+            }
+        }
 
         // Stage 4: Expander/Gate
         if voice_active || self.profile == ProcessingProfile::Studio {
@@ -474,8 +503,30 @@ impl DspPipeline {
             "noise_reduction_strength" => {
                 if let ParamValue::Float(strength) = value {
                     self.spectral_denoiser.set_strength(strength);
+                    if let Some(ref mut d) = self.nnnoise_denoiser {
+                        d.set_strength(strength);
+                    }
                 } else {
                     return Err(anyhow::anyhow!("Expected float value for noise_reduction_strength"));
+                }
+            }
+            "denoiser_backend" => {
+                match value {
+                    ParamValue::String(ref s) => {
+                        match s.as_str() {
+                            "nnnoiseless" | "rnnoise" if self.format.sample_rate == 48000 => {
+                                if self.nnnoise_denoiser.is_none() {
+                                    self.nnnoise_denoiser = Some(NnnoiseDenoiser::new());
+                                }
+                                self.denoiser_backend = DenoiserBackend::Nnnoiseless;
+                            }
+                            "spectral" => {
+                                self.denoiser_backend = DenoiserBackend::Spectral;
+                            }
+                            _ => return Err(anyhow::anyhow!("Unknown denoiser backend: {}", s)),
+                        }
+                    }
+                    _ => return Err(anyhow::anyhow!("Expected string value for denoiser_backend")),
                 }
             }
             "gate_threshold" => {
@@ -515,7 +566,22 @@ impl DspPipeline {
     pub fn get_param(&self, name: &str) -> Result<ParamValue> {
         match name {
             "highpass_frequency" => Ok(ParamValue::Float(self.highpass_filter.cutoff_hz)),
-            "noise_reduction_strength" => Ok(ParamValue::Float(self.spectral_denoiser.strength)),
+            "noise_reduction_strength" => {
+                let strength = match self.denoiser_backend {
+                    DenoiserBackend::Nnnoiseless => {
+                        self.nnnoise_denoiser.as_ref().map_or(self.spectral_denoiser.strength, |d| d.strength())
+                    }
+                    DenoiserBackend::Spectral => self.spectral_denoiser.strength,
+                };
+                Ok(ParamValue::Float(strength))
+            }
+            "denoiser_backend" => {
+                let name = match self.denoiser_backend {
+                    DenoiserBackend::Nnnoiseless => "nnnoiseless",
+                    DenoiserBackend::Spectral => "spectral",
+                };
+                Ok(ParamValue::String(name.to_string()))
+            }
             "gate_threshold" => Ok(ParamValue::Float(self.expander_gate.threshold_db)),
             "limiter_threshold" => Ok(ParamValue::Float(self.soft_limiter.threshold)),
             "bypass_vad" => Ok(ParamValue::Bool(self.bypass_vad)),
@@ -550,17 +616,25 @@ impl DspPipeline {
     /// Reset all processing stages
     pub fn reset(&mut self) {
         self.highpass_filter.reset();
-        // Other components don't have explicit reset methods yet
+        if let Some(ref mut d) = self.nnnoise_denoiser {
+            d.reset();
+        }
     }
 
     /// Get processing latency in frames
     pub fn latency_frames(&self) -> usize {
-        // HPF: ~0 frames
-        // VAD: 0 frames (current frame analysis)
-        // Spectral denoiser: 0 frames (simple version)
-        // Expander: 0 frames
-        // Limiter: lookahead samples
-        self.soft_limiter.lookahead_samples
+        let denoiser_latency = match self.denoiser_backend {
+            DenoiserBackend::Nnnoiseless => {
+                self.nnnoise_denoiser.as_ref().map_or(0, |d| d.latency_samples())
+            }
+            DenoiserBackend::Spectral => 0,
+        };
+        denoiser_latency + self.soft_limiter.lookahead_samples
+    }
+
+    /// Get the active denoiser backend.
+    pub fn denoiser_backend(&self) -> DenoiserBackend {
+        self.denoiser_backend
     }
 }
 

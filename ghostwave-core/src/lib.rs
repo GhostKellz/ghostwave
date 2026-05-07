@@ -33,7 +33,7 @@
 //! ```
 
 pub mod config;
-pub mod config_v2;
+pub mod config_manager;
 pub mod error;
 pub mod ffi;
 pub mod processor;
@@ -51,6 +51,9 @@ pub mod ipc_server;
 pub mod simd_acceleration;
 pub mod gpu_acceleration;
 pub mod rtx_denoising;
+
+// Real noise cancellation via nnnoiseless (pure-Rust RNNoise with pre-trained weights)
+pub mod nnnoiseless_denoiser;
 
 // AI-powered denoising (NVIDIA Broadcast / Krisp parity)
 pub mod ai_denoise;
@@ -80,6 +83,8 @@ pub mod cpal_backend;
 
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use tracing::{info, debug};
 
 pub use config::{Config, AudioConfig, NoiseSuppressionConfig};
@@ -87,6 +92,7 @@ pub use processor::{AudioProcessor, BypassableProcessor, ProcessingProfile, Para
 pub use frame_format::{FrameFormat, AudioBuffer, Sample};
 pub use dsp_pipeline::DspPipeline;
 pub use noise_suppression::NoiseProcessor;
+pub use nnnoiseless_denoiser::NnnoiseDenoiser;
 pub use low_latency::{LockFreeAudioBuffer, RealTimeScheduler, AudioBenchmark, TARGET_LATENCY_MS};
 pub use device_detection::{DeviceDetector, AudioDevice, AudioDeviceType};
 pub use device_manager::{DeviceManager, DeviceManagerBuilder, DeviceSelectionConfig, HotplugEvent};
@@ -131,6 +137,10 @@ pub struct GhostWaveProcessor {
     sample_rate: u32,
     channels: u32,
     frame_format: FrameFormat,
+
+    // CPU usage tracking
+    processing_time_ns: AtomicU64,
+    frames_processed: AtomicU64,
 
     #[cfg(feature = "nvidia-rtx")]
     rtx_accelerator: Option<RtxAccelerator>,
@@ -179,6 +189,8 @@ impl GhostWaveProcessor {
             sample_rate: 48000,
             channels: 1,
             frame_format: FrameFormat::default(),
+            processing_time_ns: AtomicU64::new(0),
+            frames_processed: AtomicU64::new(0),
             #[cfg(feature = "nvidia-rtx")]
             rtx_accelerator,
         })
@@ -197,10 +209,10 @@ impl GhostWaveProcessor {
 
         // Try RTX acceleration first
         #[cfg(feature = "nvidia-rtx")]
-        if let Some(ref rtx) = self.rtx_accelerator {
-            if rtx.is_rtx_available() {
-                return rtx.process_spectral_denoising(input, output, self.config.noise_suppression.strength);
-            }
+        if let Some(ref rtx) = self.rtx_accelerator
+            && rtx.is_rtx_available()
+        {
+            return rtx.process_spectral_denoising(input, output, self.config.noise_suppression.strength);
         }
 
         // Fall back to CPU processing
@@ -216,10 +228,10 @@ impl GhostWaveProcessor {
     /// Get the current processing mode (RTX GPU or CPU)
     pub fn get_processing_mode(&self) -> String {
         #[cfg(feature = "nvidia-rtx")]
-        if let Some(ref rtx) = self.rtx_accelerator {
-            if rtx.is_rtx_available() {
-                return rtx.get_processing_mode().to_string();
-            }
+        if let Some(ref rtx) = self.rtx_accelerator
+            && rtx.is_rtx_available()
+        {
+            return rtx.get_processing_mode().to_string();
         }
 
         if let Ok(processor) = self.noise_processor.lock() {
@@ -271,6 +283,17 @@ impl GhostWaveProcessor {
             Err(anyhow::anyhow!("Failed to acquire processor lock"))
         }
     }
+
+    /// Enable or disable noise suppression processing
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.config.noise_suppression.enabled = enabled;
+        info!("Noise suppression {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Check if noise suppression is enabled
+    pub fn is_enabled(&self) -> bool {
+        self.config.noise_suppression.enabled
+    }
 }
 
 impl AudioProcessor for GhostWaveProcessor {
@@ -307,6 +330,9 @@ impl AudioProcessor for GhostWaveProcessor {
             return Err(anyhow::anyhow!("Processor not initialized"));
         }
 
+        // Start timing for CPU usage measurement
+        let start_time = Instant::now();
+
         // Validate buffer format
         utils::validate_buffer(buffer, self.channels, frames)?;
 
@@ -315,6 +341,10 @@ impl AudioProcessor for GhostWaveProcessor {
 
         // Skip all processing if disabled
         if !self.config.noise_suppression.enabled {
+            // Still track timing for accurate measurement
+            let elapsed = start_time.elapsed().as_nanos() as u64;
+            self.processing_time_ns.fetch_add(elapsed, Ordering::Relaxed);
+            self.frames_processed.fetch_add(frames as u64, Ordering::Relaxed);
             return Ok(());
         }
 
@@ -326,14 +356,14 @@ impl AudioProcessor for GhostWaveProcessor {
 
             // Try RTX acceleration first
             #[cfg(feature = "nvidia-rtx")]
-            if let Some(ref rtx) = self.rtx_accelerator {
-                if rtx.is_rtx_available() {
-                    // For in-place processing, we need a temporary buffer for RTX
-                    let mut temp_output = vec![0.0f32; buffer.len()];
-                    rtx.process_spectral_denoising(buffer, &mut temp_output, self.config.noise_suppression.strength)?;
-                    buffer.copy_from_slice(&temp_output);
-                    return Ok(());
-                }
+            if let Some(ref rtx) = self.rtx_accelerator
+                && rtx.is_rtx_available()
+            {
+                // For in-place processing, we need a temporary buffer for RTX
+                let mut temp_output = vec![0.0f32; buffer.len()];
+                rtx.process_spectral_denoising(buffer, &mut temp_output, self.config.noise_suppression.strength)?;
+                buffer.copy_from_slice(&temp_output);
+                return Ok(());
             }
 
             // Fall back to CPU processing
@@ -350,6 +380,11 @@ impl AudioProcessor for GhostWaveProcessor {
                 utils::soft_clip_buffer(buffer, 0.95);
             }
         }
+
+        // Track processing time for CPU usage measurement
+        let elapsed = start_time.elapsed().as_nanos() as u64;
+        self.processing_time_ns.fetch_add(elapsed, Ordering::Relaxed);
+        self.frames_processed.fetch_add(frames as u64, Ordering::Relaxed);
 
         Ok(())
     }
@@ -371,10 +406,10 @@ impl AudioProcessor for GhostWaveProcessor {
                     let _ = pipeline.set_param(&name, value.clone());
                 }
                 // Apply to config for specific params
-                if name == "noise_reduction_strength" {
-                    if let ParamValue::Float(strength) = value {
-                        self.config.noise_suppression.strength = strength;
-                    }
+                if name == "noise_reduction_strength"
+                    && let ParamValue::Float(strength) = value
+                {
+                    self.config.noise_suppression.strength = strength;
                 }
             }
         }
@@ -388,19 +423,17 @@ impl AudioProcessor for GhostWaveProcessor {
 
     fn set_param(&mut self, name: &str, value: ParamValue) -> Result<()> {
         // First try to set parameter in DSP pipeline if available
-        if let Some(ref mut pipeline) = self.dsp_pipeline {
-            if pipeline.set_param(name, value.clone()).is_ok() {
-                debug!("Set parameter {} = {:?} in DSP pipeline", name, value);
-                self.profile_params.set_profile_param(self.profile, name.to_string(), value);
-                return Ok(());
-            }
+        if self.dsp_pipeline.as_mut().is_some_and(|pipeline| pipeline.set_param(name, value.clone()).is_ok()) {
+            debug!("Set parameter {} = {:?} in DSP pipeline", name, value);
+            self.profile_params.set_profile_param(self.profile, name.to_string(), value);
+            return Ok(());
         }
 
         // Fallback to legacy parameter handling
         match name {
             "noise_reduction_strength" => {
                 if let ParamValue::Float(strength) = value {
-                    if strength < 0.0 || strength > 1.0 {
+                    if !(0.0..=1.0).contains(&strength) {
                         return Err(anyhow::anyhow!("Noise reduction strength must be between 0.0 and 1.0"));
                     }
                     self.config.noise_suppression.strength = strength;
@@ -410,7 +443,7 @@ impl AudioProcessor for GhostWaveProcessor {
             }
             "voice_enhancement" => {
                 if let ParamValue::Float(enhancement) = value {
-                    if enhancement < 0.0 || enhancement > 1.0 {
+                    if !(0.0..=1.0).contains(&enhancement) {
                         return Err(anyhow::anyhow!("Voice enhancement must be between 0.0 and 1.0"));
                     }
                     self.profile_params.set_profile_param(self.profile, name.to_string(), ParamValue::Float(enhancement));
@@ -420,7 +453,7 @@ impl AudioProcessor for GhostWaveProcessor {
             }
             "gate_threshold" => {
                 if let ParamValue::Float(threshold) = value {
-                    if threshold < -80.0 || threshold > 0.0 {
+                    if !(-80.0..=0.0).contains(&threshold) {
                         return Err(anyhow::anyhow!("Gate threshold must be between -80.0 and 0.0 dB"));
                     }
                     self.profile_params.set_profile_param(self.profile, name.to_string(), ParamValue::Float(threshold));
@@ -437,7 +470,7 @@ impl AudioProcessor for GhostWaveProcessor {
             }
             "highpass_frequency" => {
                 if let ParamValue::Float(freq) = value {
-                    if freq < 20.0 || freq > 500.0 {
+                    if !(20.0..=500.0).contains(&freq) {
                         return Err(anyhow::anyhow!("Highpass frequency must be between 20.0 and 500.0 Hz"));
                     }
                     self.profile_params.set_profile_param(self.profile, name.to_string(), ParamValue::Float(freq));
@@ -568,8 +601,27 @@ impl AudioProcessor for GhostWaveProcessor {
     }
 
     fn cpu_usage(&self) -> f32 {
-        // TODO: Implement actual CPU usage measurement
-        0.0
+        // Calculate CPU usage as ratio of processing time to real-time audio budget
+        let frames = self.frames_processed.load(Ordering::Relaxed);
+        if frames == 0 || self.sample_rate == 0 {
+            return 0.0;
+        }
+
+        let processing_ns = self.processing_time_ns.load(Ordering::Relaxed);
+
+        // Real-time budget: how long the audio would take to play
+        // budget_ns = (frames / sample_rate) * 1_000_000_000
+        let budget_ns = (frames as f64 / self.sample_rate as f64) * 1_000_000_000.0;
+
+        if budget_ns <= 0.0 {
+            return 0.0;
+        }
+
+        // CPU usage percentage: (processing_time / real_time_budget) * 100
+        let usage = (processing_ns as f64 / budget_ns) * 100.0;
+
+        // Clamp to reasonable range
+        usage.clamp(0.0, 100.0) as f32
     }
 }
 
@@ -584,22 +636,17 @@ pub enum AudioBackend {
 
 impl AudioBackend {
     /// Get all compiled-in backends
+    #[allow(unused_mut)] // May be mutated depending on enabled features
     pub fn available_backends() -> Vec<AudioBackend> {
-        #[allow(unused_mut)]
         let mut backends = Vec::new();
-
         #[cfg(feature = "pipewire-backend")]
         backends.push(AudioBackend::PipeWire);
-
         #[cfg(feature = "alsa-backend")]
         backends.push(AudioBackend::Alsa);
-
         #[cfg(feature = "jack-backend")]
         backends.push(AudioBackend::Jack);
-
         #[cfg(feature = "cpal-backend")]
         backends.push(AudioBackend::Cpal);
-
         backends
     }
 
@@ -658,7 +705,7 @@ impl AudioBackend {
         let backends = Self::available_backends();
 
         // Preference order: JACK (pro audio) > PipeWire (modern) > ALSA (direct) > CPAL (fallback)
-        for &backend in &[
+        [
             #[cfg(feature = "jack-backend")]
             AudioBackend::Jack,
             #[cfg(feature = "pipewire-backend")]
@@ -667,13 +714,9 @@ impl AudioBackend {
             AudioBackend::Alsa,
             #[cfg(feature = "cpal-backend")]
             AudioBackend::Cpal,
-        ] {
-            if backends.contains(&backend) && backend.is_available() {
-                return Some(backend);
-            }
-        }
-
-        None
+        ]
+        .into_iter()
+        .find(|backend| backends.contains(backend) && backend.is_available())
     }
 }
 

@@ -112,7 +112,8 @@ impl DeviceDetector {
         match host.input_devices() {
             Ok(input_devices) => {
                 for device in input_devices {
-                    if let Ok(name) = device.name() {
+                    if let Ok(desc) = device.description() {
+                        let name = desc.name().to_string();
                         debug!("Found input device: {}", name);
 
                         // Try to match with ALSA card info first

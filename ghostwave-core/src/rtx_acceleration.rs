@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::rtx_denoising::{RtxDenoiser, RtxDenoiseConfig, DenoiseStrength, DenoiseAlgorithm};
 
 #[cfg(feature = "nvidia-rtx")]
-use cudarc::driver::CudaDevice;
+use cudarc::driver::CudaContext;
 
 #[cfg(feature = "nvidia-rtx")]
 static RTX_DENOISER_CACHE: OnceLock<Arc<Mutex<SharedRtxDenoiser>>> = OnceLock::new();
@@ -39,22 +39,13 @@ static GPU_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
 static GPU_FALLBACK_REASON: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
 
 #[cfg(feature = "nvidia-rtx")]
+#[derive(Default)]
 struct SharedRtxDenoiser {
     denoiser: Option<RtxDenoiser>,
     fft_size: usize,
     hop_size: usize,
 }
 
-#[cfg(feature = "nvidia-rtx")]
-impl Default for SharedRtxDenoiser {
-    fn default() -> Self {
-        Self {
-            denoiser: None,
-            fft_size: 0,
-            hop_size: 0,
-        }
-    }
-}
 
 /// RTX GPU acceleration for noise suppression
 /// Leverages NVIDIA's open GPU kernel modules for RTX 20 series and newer
@@ -65,7 +56,7 @@ impl Default for SharedRtxDenoiser {
 /// 2. Without the feature: Uses runtime CUDA detection for compatibility
 pub struct RtxAccelerator {
     #[cfg(feature = "nvidia-rtx")]
-    device: Option<Arc<CudaDevice>>,
+    device: Option<Arc<CudaContext>>,
 
     #[cfg(feature = "nvidia-rtx")]
     shared_denoiser: Arc<Mutex<SharedRtxDenoiser>>,
@@ -140,17 +131,12 @@ pub struct RtxReadiness {
     pub gsp_ready: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DriverKind {
     Proprietary,
     Open,
+    #[default]
     Unknown,
-}
-
-impl Default for DriverKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Comprehensive RTX system information returned by diagnostics
@@ -339,11 +325,11 @@ impl RtxAccelerator {
     }
 
     #[cfg(feature = "nvidia-rtx")]
-    fn init_cuda() -> Result<(Arc<CudaDevice>, (u32, u32))> {
+    fn init_cuda() -> Result<(Arc<CudaContext>, (u32, u32))> {
         info!("Detecting NVIDIA RTX GPU with open drivers...");
 
         // Initialize CUDA device
-        let device = CudaDevice::new(0)?;
+        let device = CudaContext::new(0)?;
 
         // Get compute capability
         let major = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)?;
@@ -405,7 +391,7 @@ impl RtxAccelerator {
                 let tensor_core_gen = gpu_gen.tensor_core_generation();
 
                 // Get memory info
-                let memory_bytes = cudarc::driver::result::mem_get_info()
+                let memory_bytes = _device.mem_get_info()
                     .map(|(_free, total)| total)
                     .unwrap_or(0);
                 let memory_gb = memory_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
@@ -416,7 +402,11 @@ impl RtxAccelerator {
                     memory_gb,
                     compute_capability,
                     supports_rtx_voice,
-                    driver_version: "580+".to_string(), // NVIDIA open drivers 580+ for RTX 50 series
+                    driver_version: std::fs::read_to_string("/proc/driver/nvidia/version")
+                        .ok()
+                        .and_then(|s| s.lines().next().map(|l| l.to_string()))
+                        .and_then(|l| l.find("Module").map(|pos| l[pos+6..].trim().split_whitespace().next().unwrap_or("unknown").to_string()))
+                        .unwrap_or_else(|| "unknown".to_string()),
                     gpu_generation: gpu_gen,
                     supports_fp4,
                     tensor_core_gen,
@@ -558,26 +548,28 @@ impl RtxAccelerator {
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock shared RTX denoiser"))?;
 
-        let target_fft = input.len().next_power_of_two().max(1024).min(4096);
+        let target_fft = input.len().next_power_of_two().clamp(1024, 4096);
         let target_hop = target_fft / 4;
 
         if shared.denoiser.is_none() || shared.fft_size != target_fft {
             debug!("Initializing RTX denoiser context (fft: {}, hop: {})", target_fft, target_hop);
-            let mut config = RtxDenoiseConfig::default();
-            config.strength = match strength {
-                s if s < 0.3 => DenoiseStrength::Light,
-                s if s < 0.6 => DenoiseStrength::Moderate,
-                s if s < 0.85 => DenoiseStrength::Aggressive,
-                _ => DenoiseStrength::Maximum,
+            let config = RtxDenoiseConfig {
+                strength: match strength {
+                    s if s < 0.3 => DenoiseStrength::Light,
+                    s if s < 0.6 => DenoiseStrength::Moderate,
+                    s if s < 0.85 => DenoiseStrength::Aggressive,
+                    _ => DenoiseStrength::Maximum,
+                },
+                algorithm: if prefer_fp4 {
+                    DenoiseAlgorithm::TensorTransformer
+                } else {
+                    DenoiseAlgorithm::TensorRnn
+                },
+                use_tensor_cores: true,
+                fft_size: target_fft,
+                hop_size: target_hop,
+                ..Default::default()
             };
-            config.algorithm = if prefer_fp4 {
-                DenoiseAlgorithm::TensorTransformer
-            } else {
-                DenoiseAlgorithm::TensorRnn
-            };
-            config.use_tensor_cores = true;
-            config.fft_size = target_fft;
-            config.hop_size = target_hop;
 
             debug!(
                 "RTX denoiser config -> fft: {}, hop: {}, algo: {:?}, strength: {:?}",
@@ -616,7 +608,7 @@ impl RtxAccelerator {
         }
 
         // Simple spectral attenuation (placeholder for full RTX implementation)
-        for (i, &sample) in input.iter().enumerate() {
+        for (out, &sample) in output.iter_mut().zip(input.iter()) {
             // Apply noise reduction based on magnitude
             let magnitude = sample.abs();
             let gate_threshold = 0.01; // -40dB threshold
@@ -627,7 +619,7 @@ impl RtxAccelerator {
                 1.0 - (strength * 0.3) // Less attenuation for stronger signals
             };
 
-            output[i] = sample * attenuation;
+            *out = sample * attenuation;
         }
 
         Ok(())
@@ -678,19 +670,16 @@ impl RtxAccelerator {
     #[cfg(feature = "nvidia-rtx")]
     fn check_driver_supports_fp4() -> bool {
         // Read driver version from /proc/driver/nvidia/version
-        if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version") {
-            if let Some(line) = version_str.lines().next() {
-                // Parse: "NVRM version: NVIDIA UNIX x86_64 Kernel Module  590.44.01  ..."
-                if let Some(ver_start) = line.find("Module") {
-                    let ver_part = &line[ver_start + 6..];
-                    if let Some(ver) = ver_part.trim().split_whitespace().next() {
-                        if let Some(major_str) = ver.split('.').next() {
-                            if let Ok(major) = major_str.parse::<u32>() {
-                                return major >= 590;
-                            }
-                        }
-                    }
-                }
+        if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version")
+            && let Some(line) = version_str.lines().next()
+            && let Some(ver_start) = line.find("Module")
+        {
+            let ver_part = &line[ver_start + 6..];
+            if let Some(ver) = ver_part.split_whitespace().next()
+                && let Some(major_str) = ver.split('.').next()
+                && let Ok(major) = major_str.parse::<u32>()
+            {
+                return major >= 590;
             }
         }
 
@@ -778,28 +767,26 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
     }
 
     // Try to get driver version from nvidia-smi or /proc
-    if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version") {
-        if let Some(line) = version_str.lines().next() {
-            // Parse: "NVRM version: NVIDIA UNIX x86_64 Kernel Module  590.44.01  ..."
-            if let Some(ver_start) = line.find("Module") {
-                let ver_part = &line[ver_start + 6..];
-                let mut tokens = ver_part.trim().split_whitespace();
-                if let Some(ver) = tokens.next() {
-                    driver_version = Some(ver.to_string());
-                    info!("Driver version: {}", ver);
+    if let Ok(version_str) = std::fs::read_to_string("/proc/driver/nvidia/version")
+        && let Some(line) = version_str.lines().next()
+        && let Some(ver_start) = line.find("Module")
+    {
+        let ver_part = &line[ver_start + 6..];
+        let mut tokens = ver_part.split_whitespace();
+        if let Some(ver) = tokens.next() {
+            driver_version = Some(ver.to_string());
+            info!("Driver version: {}", ver);
 
-                    // Check if driver supports RTX 50 series (590+)
-                    if let Ok(major) = ver.split('.').next().unwrap_or("0").parse::<u32>() {
-                        if major >= 590 {
-                            info!("✅ Driver supports RTX 50 series (Blackwell)");
-                        }
-                    }
-                }
-
-                // Remainder may contain branch info like "Production Branch" or "R535"
-                _driver_branch = tokens.next().map(|token| token.to_string());
+            // Check if driver supports RTX 50 series (590+)
+            if let Ok(major) = ver.split('.').next().unwrap_or("0").parse::<u32>()
+                && major >= 590
+            {
+                info!("✅ Driver supports RTX 50 series (Blackwell)");
             }
         }
+
+        // Remainder may contain branch info like "Production Branch" or "R535"
+        _driver_branch = tokens.next().map(|token| token.to_string());
     }
 
     // Try to detect GPU via /proc/driver/nvidia/gpus
@@ -819,7 +806,7 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
     // Detect GPU generation and capabilities via CUDA if available
     #[cfg(feature = "nvidia-rtx")]
     {
-        if let Ok(device) = cudarc::driver::CudaDevice::new(0) {
+        if let Ok(device) = cudarc::driver::CudaContext::new(0) {
             if let Ok(major) = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR) {
                 if let Ok(minor) = device.attribute(cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR) {
                     compute_capability = (major as u32, minor as u32);
@@ -847,7 +834,7 @@ pub fn check_rtx_system_requirements() -> Result<RtxSystemInfo> {
                 }
             }
 
-            if let Ok((_free, total)) = cudarc::driver::result::mem_get_info() {
+            if let Ok((_free, total)) = device.mem_get_info() {
                 memory_gb = total as f32 / (1024.0 * 1024.0 * 1024.0);
             }
         }
@@ -936,14 +923,35 @@ mod tests {
     async fn test_spectral_processing() {
         let accelerator = RtxAccelerator::new().unwrap();
 
-        let input = vec![0.1, 0.2, -0.1, 0.05, 0.0];
-        let mut output = vec![0.0; 5];
+        // Use realistic audio frame size (480 samples = 10ms at 48kHz)
+        // Small inputs (< 1024 samples) go through FFT resizing
+        let frame_size = 480;
+        let input: Vec<f32> = (0..frame_size)
+            .map(|i| (i as f32 * 0.01).sin() * 0.5)  // Generate a sine wave
+            .collect();
+        let mut output = vec![0.0; frame_size];
 
         let result = accelerator.process_spectral_denoising(&input, &mut output, 0.7);
         assert!(result.is_ok());
 
-        // Output should be different from input (processed)
-        assert_ne!(input, output);
+        // Output buffer should be populated (not all zeros)
+        let non_zero_count = output.iter().filter(|&&x| x != 0.0).count();
+        assert!(non_zero_count > frame_size / 2, "Most samples should be non-zero after processing");
+
+        // Verify denoising modified the signal (both CPU and GPU paths apply attenuation)
+        // CPU path applies sample * (1 - strength * 0.3) for magnitudes above threshold
+        let output_differs = input.iter().zip(output.iter())
+            .any(|(i, o)| (i - o).abs() > 1e-6);
+        assert!(output_differs, "Processing should modify the signal");
+
+        // Check GPU status after processing
+        let status = RtxAccelerator::get_gpu_status();
+        info!(
+            "GPU active: {}, fallback: {}, mode: {}",
+            status.gpu_active,
+            status.fallback_active,
+            accelerator.get_processing_mode()
+        );
     }
 
     #[test]

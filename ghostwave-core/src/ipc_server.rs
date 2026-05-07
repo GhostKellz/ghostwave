@@ -121,8 +121,8 @@ pub struct ProcessorStats {
     pub uptime_seconds: u64,
 }
 
-impl GhostWaveIpcHandler {
-    pub fn new() -> Self {
+impl Default for GhostWaveIpcHandler {
+    fn default() -> Self {
         let default_params = HashMap::new();
         let default_descriptors = HashMap::new();
 
@@ -150,6 +150,12 @@ impl GhostWaveIpcHandler {
             telemetry: crate::telemetry::telemetry(),
         }
     }
+}
+
+impl GhostWaveIpcHandler {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Create handler with telemetry collector
     pub fn with_telemetry(telemetry: Arc<TelemetryCollector>) -> Self {
@@ -164,7 +170,7 @@ impl GhostWaveIpcHandler {
     {
         let mut state = self.processor_state.write()
             .map_err(|_| anyhow::anyhow!("Failed to acquire state write lock"))?;
-        updater(&mut *state)
+        updater(&mut state)
     }
 
     pub fn get_state(&self) -> Result<ProcessorState> {

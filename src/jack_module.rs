@@ -150,7 +150,7 @@ impl JackModule {
 
         // Verify sample rate compatibility
         let jack_sample_rate = client.sample_rate();
-        if jack_sample_rate != self.config.audio.sample_rate as usize {
+        if jack_sample_rate != self.config.audio.sample_rate {
             warn!(
                 "Sample rate mismatch: JACK={}Hz, Config={}Hz",
                 jack_sample_rate, self.config.audio.sample_rate
@@ -328,7 +328,7 @@ impl Drop for JackModule {
 #[allow(dead_code)] // Public API for JACK introspection
 pub struct JackInfo {
     pub client_name: String,
-    pub sample_rate: usize,
+    pub sample_rate: u32,
     pub buffer_size: u32,
     pub cpu_load: f32,
     pub is_realtime: bool,

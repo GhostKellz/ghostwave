@@ -73,8 +73,6 @@ cpal-backend = ["cpal"]
 # GPU acceleration
 nvidia-rtx = ["cudarc"]
 cuda-tensorrt = ["cudarc"]
-vulkan-compute = []
-opencl = []
 
 # All features
 full = [

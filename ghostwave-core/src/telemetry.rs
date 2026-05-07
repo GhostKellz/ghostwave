@@ -288,10 +288,8 @@ impl TelemetryCollector {
 
     /// Get GPU metrics
     pub fn get_gpu_metrics(&self) -> GpuMetrics {
-        if let Ok(info) = self.gpu_info.read() {
-            if let Some(gpu) = info.as_ref() {
-                return gpu.clone();
-            }
+        if let Some(gpu) = self.gpu_info.read().ok().and_then(|info| info.clone()) {
+            return gpu;
         }
 
         // Return default "not available" metrics

@@ -24,6 +24,19 @@ pub mod model_manager;
 pub mod tensorrt;
 pub mod features;
 pub mod inference;
+pub mod model_weights;
+#[cfg(feature = "nvidia-rtx")]
+pub mod cuda_kernels;
+
+pub use model_weights::{RNNoiseModelWeights, ModelSize, generate_pretrained_models};
+
+// CUDA graph capture for ultra-low latency
+#[cfg(feature = "nvidia-rtx")]
+pub use cuda_kernels::{
+    CudaKernelModule, GpuRNNoiseEngine, RNNoiseWeights, GruWeights,
+    CudaGraphInference, GraphOptimizedRNNoiseEngine, GraphExecutionMode,
+    GraphStats, GraphConfig,
+};
 
 use anyhow::Result;
 use std::sync::Arc;

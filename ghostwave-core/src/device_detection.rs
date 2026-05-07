@@ -44,13 +44,19 @@ pub struct DeviceDetector {
     known_devices: HashMap<String, AudioDevice>,
 }
 
-impl DeviceDetector {
-    pub fn new() -> Self {
+impl Default for DeviceDetector {
+    fn default() -> Self {
         let mut detector = Self {
             known_devices: HashMap::new(),
         };
         detector.load_known_devices();
         detector
+    }
+}
+
+impl DeviceDetector {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn load_known_devices(&mut self) {
@@ -117,7 +123,8 @@ impl DeviceDetector {
         match host.input_devices() {
             Ok(input_devices) => {
                 for device in input_devices {
-                    if let Ok(name) = device.name() {
+                    if let Ok(desc) = device.description() {
+                        let name = desc.name().to_string();
                         debug!("Found input device: {}", name);
 
                         // Try to match with ALSA card info first
@@ -173,18 +180,16 @@ impl DeviceDetector {
                     continue;
                 }
                 // Parse lines like: " 3 [Gen            ]: USB-Audio - Scarlett Solo 4th Gen"
-                if let Some(bracket_start) = line.find('[') {
-                    if let Some(bracket_end) = line.find(']') {
-                        if let Some(dash_pos) = line.rfind(" - ") {
-                            let short_name = line[bracket_start + 1..bracket_end].trim().to_string();
-                            let long_name = line[dash_pos + 3..].trim().to_string();
-                            cards.push(AlsaCard {
-                                short_name,
-                                long_name,
-                            });
-                            debug!("Found ALSA card: {} -> {}", cards.last().unwrap().short_name, cards.last().unwrap().long_name);
-                        }
-                    }
+                if let (Some(bracket_start), Some(bracket_end), Some(dash_pos)) =
+                    (line.find('['), line.find(']'), line.rfind(" - "))
+                {
+                    let short_name = line[bracket_start + 1..bracket_end].trim().to_string();
+                    let long_name = line[dash_pos + 3..].trim().to_string();
+                    cards.push(AlsaCard {
+                        short_name,
+                        long_name,
+                    });
+                    debug!("Found ALSA card: {} -> {}", cards.last().unwrap().short_name, cards.last().unwrap().long_name);
                 }
             }
         }

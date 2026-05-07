@@ -1,7 +1,7 @@
 //! # GPU Acceleration Support
 //!
 //! Provides feature flags and abstraction layer for GPU-accelerated audio processing.
-//! Supports CUDA/TensorRT for NVIDIA RTX and Vulkan compute for cross-platform acceleration.
+//! Supports CUDA/TensorRT for NVIDIA RTX acceleration.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -12,10 +12,6 @@ use tracing::{info, warn};
 pub enum GpuBackend {
     /// NVIDIA CUDA with TensorRT optimizations
     CudaTensorRT,
-    /// Vulkan compute shaders (cross-platform)
-    Vulkan,
-    /// OpenCL acceleration (cross-platform)
-    OpenCL,
     /// CPU fallback
     None,
 }
@@ -24,8 +20,6 @@ impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuBackend::CudaTensorRT => write!(f, "CUDA/TensorRT"),
-            GpuBackend::Vulkan => write!(f, "Vulkan Compute"),
-            GpuBackend::OpenCL => write!(f, "OpenCL"),
             GpuBackend::None => write!(f, "CPU"),
         }
     }
@@ -36,7 +30,7 @@ impl std::fmt::Display for GpuBackend {
 pub struct GpuDeviceInfo {
     pub name: String,
     pub memory_gb: f32,
-    pub compute_capability: (u32, u32), // For CUDA
+    pub compute_capability: (u32, u32),
     pub backend: GpuBackend,
     pub supports_fp16: bool,
     pub supports_int8: bool,
@@ -49,8 +43,6 @@ pub struct GpuDeviceInfo {
 pub struct GpuCapabilities {
     pub cuda_available: bool,
     pub tensorrt_available: bool,
-    pub vulkan_available: bool,
-    pub opencl_available: bool,
     pub devices: Vec<GpuDeviceInfo>,
     pub recommended_backend: Option<GpuBackend>,
 }
@@ -60,7 +52,6 @@ impl GpuCapabilities {
     pub fn detect() -> Self {
         let mut caps = Self::default();
 
-        // Detect CUDA/TensorRT
         #[cfg(feature = "cuda-tensorrt")]
         {
             caps.cuda_available = Self::detect_cuda();
@@ -71,71 +62,40 @@ impl GpuCapabilities {
             }
         }
 
-        // Detect Vulkan compute
-        #[cfg(feature = "vulkan-compute")]
-        {
-            caps.vulkan_available = Self::detect_vulkan();
-            if caps.vulkan_available {
-                caps.devices.extend(Self::detect_vulkan_devices());
-            }
-        }
-
-        // Detect OpenCL
-        #[cfg(feature = "opencl")]
-        {
-            caps.opencl_available = Self::detect_opencl();
-            if caps.opencl_available {
-                caps.devices.extend(Self::detect_opencl_devices());
-            }
-        }
-
-        // Determine recommended backend
         caps.recommended_backend = caps.get_recommended_backend();
-
         caps
     }
 
     #[cfg(feature = "cuda-tensorrt")]
     fn detect_cuda() -> bool {
-        // Check for NVIDIA driver and CUDA runtime
         match std::process::Command::new("nvidia-smi").output() {
             Ok(output) => {
                 let success = output.status.success();
                 if success {
-                    info!("✅ NVIDIA driver detected");
-                } else {
-                    debug!("NVIDIA driver check failed");
+                    info!("NVIDIA driver detected");
                 }
                 success
             }
-            Err(_) => {
-                debug!("nvidia-smi not found");
-                false
-            }
+            Err(_) => false,
         }
     }
 
     #[cfg(feature = "cuda-tensorrt")]
     fn detect_tensorrt() -> bool {
-        // Check for TensorRT library
         match std::process::Command::new("python3")
-            .args(&["-c", "import tensorrt; print(tensorrt.__version__)"])
+            .args(["-c", "import tensorrt; print(tensorrt.__version__)"])
             .output()
         {
             Ok(output) => {
                 if output.status.success() {
                     let version = String::from_utf8_lossy(&output.stdout);
-                    info!("✅ TensorRT detected: {}", version.trim());
+                    info!("TensorRT detected: {}", version.trim());
                     true
                 } else {
-                    debug!("TensorRT import failed");
                     false
                 }
             }
-            Err(_) => {
-                debug!("Python/TensorRT check failed");
-                false
-            }
+            Err(_) => false,
         }
     }
 
@@ -143,9 +103,8 @@ impl GpuCapabilities {
     fn detect_cuda_devices() -> Vec<GpuDeviceInfo> {
         use std::process::Command;
 
-        // Try to detect actual GPU via nvidia-smi
         if let Ok(output) = Command::new("nvidia-smi")
-            .args(&["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+            .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
             .output()
         {
             if output.status.success() {
@@ -157,10 +116,8 @@ impl GpuCapabilities {
                     let memory_mb: f32 = parts[1].trim().parse().unwrap_or(8192.0);
                     let memory_gb = memory_mb / 1024.0;
 
-                    // Detect compute capability based on GPU name
-                    // RTX 5090 actually reports compute 12.0 (not 10.0)
                     let compute_capability = if name.contains("RTX 50") || name.contains("5090") || name.contains("5080") {
-                        (12, 0) // Blackwell (RTX 5090 reports 12.0)
+                        (12, 0) // Blackwell
                     } else if name.contains("RTX 40") || name.contains("4090") || name.contains("4080") {
                         (8, 9) // Ada Lovelace
                     } else if name.contains("RTX 30") || name.contains("3090") || name.contains("3080") {
@@ -170,14 +127,6 @@ impl GpuCapabilities {
                     };
 
                     info!("Detected GPU: {} with {:.1}GB memory", name, memory_gb);
-
-                    // ASUS ROG Astral RTX 5090 specific detection
-                    if name.contains("5090") && memory_gb > 30.0 {
-                        info!("🔥 ASUS ROG Astral RTX 5090 detected!");
-                        info!("   Quad-fan cooling optimized for sustained performance");
-                        info!("   Factory OC: 2610MHz boost (630W max power)");
-                        info!("   32GB GDDR7 memory - perfect for large audio buffers");
-                    }
 
                     return vec![GpuDeviceInfo {
                         name,
@@ -193,12 +142,11 @@ impl GpuCapabilities {
             }
         }
 
-        // Fallback to generic RTX GPU
         warn!("Could not detect GPU via nvidia-smi, using generic RTX profile");
         vec![GpuDeviceInfo {
             name: "NVIDIA RTX GPU".to_string(),
             memory_gb: 8.0,
-            compute_capability: (8, 6), // Ampere fallback
+            compute_capability: (8, 6),
             backend: GpuBackend::CudaTensorRT,
             supports_fp16: true,
             supports_int8: true,
@@ -207,51 +155,8 @@ impl GpuCapabilities {
         }]
     }
 
-    #[cfg(feature = "vulkan-compute")]
-    fn detect_vulkan() -> bool {
-        // Check for Vulkan loader
-        match vulkanalia::Instance::new(&Default::default()) {
-            Ok(_) => {
-                info!("✅ Vulkan compute available");
-                true
-            }
-            Err(e) => {
-                debug!("Vulkan detection failed: {}", e);
-                false
-            }
-        }
-    }
-
-    #[cfg(feature = "vulkan-compute")]
-    fn detect_vulkan_devices() -> Vec<GpuDeviceInfo> {
-        // Use vulkanalia to enumerate devices
-        // For now, return mock data
-        vec![GpuDeviceInfo {
-            name: "Vulkan GPU".to_string(),
-            memory_gb: 4.0,
-            compute_capability: (0, 0),
-            backend: GpuBackend::Vulkan,
-            supports_fp16: true,
-            supports_int8: false,
-            max_threads_per_block: 256,
-            max_shared_memory_kb: 16,
-        }]
-    }
-
-    #[cfg(feature = "opencl")]
-    fn detect_opencl() -> bool {
-        // Check for OpenCL runtime
-        debug!("OpenCL detection not implemented yet");
-        false
-    }
-
-    #[cfg(feature = "opencl")]
-    fn detect_opencl_devices() -> Vec<GpuDeviceInfo> {
-        vec![]
-    }
-
     #[cfg(not(feature = "cuda-tensorrt"))]
-    #[allow(dead_code)] // Stub when CUDA feature disabled
+    #[allow(dead_code)]
     fn detect_cuda() -> bool { false }
 
     #[cfg(not(feature = "cuda-tensorrt"))]
@@ -262,66 +167,34 @@ impl GpuCapabilities {
     #[allow(dead_code)]
     fn detect_cuda_devices() -> Vec<GpuDeviceInfo> { vec![] }
 
-    #[cfg(not(feature = "vulkan-compute"))]
-    #[allow(dead_code)] // Stub when Vulkan feature disabled
-    fn detect_vulkan() -> bool { false }
-
-    #[cfg(not(feature = "vulkan-compute"))]
-    #[allow(dead_code)]
-    fn detect_vulkan_devices() -> Vec<GpuDeviceInfo> { vec![] }
-
-    #[cfg(not(feature = "opencl"))]
-    #[allow(dead_code)] // Stub when OpenCL feature disabled
-    fn detect_opencl() -> bool { false }
-
-    #[cfg(not(feature = "opencl"))]
-    #[allow(dead_code)]
-    fn detect_opencl_devices() -> Vec<GpuDeviceInfo> { vec![] }
-
     fn get_recommended_backend(&self) -> Option<GpuBackend> {
-        // Preference order: CUDA/TensorRT > Vulkan > OpenCL
-        if self.tensorrt_available {
+        if self.tensorrt_available || self.cuda_available {
             Some(GpuBackend::CudaTensorRT)
-        } else if self.vulkan_available {
-            Some(GpuBackend::Vulkan)
-        } else if self.opencl_available {
-            Some(GpuBackend::OpenCL)
         } else {
             None
         }
     }
 
     pub fn report(&self) {
-        info!("🚀 GPU Acceleration Capabilities:");
+        info!("GPU Acceleration Capabilities:");
         info!("  CUDA Available: {}", self.cuda_available);
         info!("  TensorRT Available: {}", self.tensorrt_available);
-        info!("  Vulkan Available: {}", self.vulkan_available);
-        info!("  OpenCL Available: {}", self.opencl_available);
         info!("  Detected Devices: {}", self.devices.len());
 
         for device in &self.devices {
-            info!("  • {} ({}) - {:.1}GB VRAM", device.name, device.backend, device.memory_gb);
+            info!("  - {} ({}) - {:.1}GB VRAM", device.name, device.backend, device.memory_gb);
         }
 
         if let Some(backend) = self.recommended_backend {
-            info!("  ✅ Recommended Backend: {}", backend);
+            info!("  Recommended Backend: {}", backend);
         } else {
-            info!("  💻 No GPU acceleration available, using CPU");
+            info!("  No GPU acceleration available, using CPU");
         }
     }
 
     pub fn best_device(&self) -> Option<&GpuDeviceInfo> {
         self.devices.iter().max_by(|a, b| {
-            // Prefer CUDA > Vulkan > OpenCL, then by memory
-            match (a.backend, b.backend) {
-                (GpuBackend::CudaTensorRT, GpuBackend::CudaTensorRT) => a.memory_gb.partial_cmp(&b.memory_gb).unwrap(),
-                (GpuBackend::CudaTensorRT, _) => std::cmp::Ordering::Greater,
-                (_, GpuBackend::CudaTensorRT) => std::cmp::Ordering::Less,
-                (GpuBackend::Vulkan, GpuBackend::Vulkan) => a.memory_gb.partial_cmp(&b.memory_gb).unwrap(),
-                (GpuBackend::Vulkan, _) => std::cmp::Ordering::Greater,
-                (_, GpuBackend::Vulkan) => std::cmp::Ordering::Less,
-                _ => a.memory_gb.partial_cmp(&b.memory_gb).unwrap(),
-            }
+            a.memory_gb.partial_cmp(&b.memory_gb).unwrap()
         })
     }
 }
@@ -369,7 +242,6 @@ pub enum GpuOperation {
 pub struct CudaTensorRTAccelerator {
     device_info: GpuDeviceInfo,
     initialized: bool,
-    // TensorRT engine, CUDA context, etc.
 }
 
 #[cfg(feature = "cuda-tensorrt")]
@@ -385,10 +257,7 @@ impl CudaTensorRTAccelerator {
 #[cfg(feature = "cuda-tensorrt")]
 impl GpuAccelerator for CudaTensorRTAccelerator {
     fn initialize(&mut self) -> Result<()> {
-        info!("🚀 Initializing CUDA/TensorRT accelerator");
-        // Initialize CUDA context
-        // Load TensorRT engine for noise suppression
-        // Allocate GPU buffers
+        info!("Initializing CUDA/TensorRT accelerator");
         self.initialized = true;
         Ok(())
     }
@@ -403,7 +272,6 @@ impl GpuAccelerator for CudaTensorRTAccelerator {
                 self.process_spectral_denoising(input, output, strength)
             }
             _ => {
-                // Copy input to output for unsupported operations
                 output.copy_from_slice(input);
                 Ok(())
             }
@@ -411,17 +279,10 @@ impl GpuAccelerator for CudaTensorRTAccelerator {
     }
 
     fn process_spectral_denoising(&mut self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
-        // 1. Copy input to GPU memory
-        // 2. Run TensorRT inference for noise suppression
-        // 3. Copy result back to CPU memory
-
-        debug!("Processing spectral denoising with strength {:.2}", strength);
-
-        // Placeholder: Apply simple gain reduction as fallback
-        for (i, &sample) in input.iter().enumerate() {
-            output[i] = sample * (1.0 - strength * 0.5);
+        // Placeholder: will be replaced with real TensorRT inference
+        for (out, &sample) in output.iter_mut().zip(input.iter()) {
+            *out = sample * (1.0 - strength * 0.5);
         }
-
         Ok(())
     }
 
@@ -438,90 +299,11 @@ impl GpuAccelerator for CudaTensorRTAccelerator {
     }
 
     fn latency_samples(&self) -> usize {
-        // TensorRT typically adds 1-2 buffer lengths of latency
         128 // Placeholder
     }
 
     fn memory_usage(&self) -> usize {
-        // Model weights + intermediate buffers
         50 * 1024 * 1024 // ~50MB placeholder
-    }
-}
-
-/// Vulkan compute accelerator implementation
-#[cfg(feature = "vulkan-compute")]
-pub struct VulkanAccelerator {
-    device_info: GpuDeviceInfo,
-    initialized: bool,
-    // Vulkan instance, device, command pool, etc.
-}
-
-#[cfg(feature = "vulkan-compute")]
-impl VulkanAccelerator {
-    pub fn new(device_info: GpuDeviceInfo) -> Self {
-        Self {
-            device_info,
-            initialized: false,
-        }
-    }
-}
-
-#[cfg(feature = "vulkan-compute")]
-impl GpuAccelerator for VulkanAccelerator {
-    fn initialize(&mut self) -> Result<()> {
-        info!("🚀 Initializing Vulkan compute accelerator");
-        // Initialize Vulkan instance and device
-        // Compile compute shaders
-        // Allocate buffers
-        self.initialized = true;
-        Ok(())
-    }
-
-    fn process_audio(&mut self, input: &[f32], output: &mut [f32], operation: GpuOperation) -> Result<()> {
-        if !self.initialized {
-            return Err(anyhow::anyhow!("Vulkan accelerator not initialized"));
-        }
-
-        match operation {
-            GpuOperation::SpectralDenoising { strength } => {
-                self.process_spectral_denoising(input, output, strength)
-            }
-            _ => {
-                output.copy_from_slice(input);
-                Ok(())
-            }
-        }
-    }
-
-    fn process_spectral_denoising(&mut self, input: &[f32], output: &mut [f32], strength: f32) -> Result<()> {
-        debug!("Processing spectral denoising with Vulkan compute, strength {:.2}", strength);
-
-        // Placeholder implementation
-        for (i, &sample) in input.iter().enumerate() {
-            output[i] = sample * (1.0 - strength * 0.3);
-        }
-
-        Ok(())
-    }
-
-    fn device_info(&self) -> &GpuDeviceInfo {
-        &self.device_info
-    }
-
-    fn backend(&self) -> GpuBackend {
-        GpuBackend::Vulkan
-    }
-
-    fn is_available(&self) -> bool {
-        self.initialized
-    }
-
-    fn latency_samples(&self) -> usize {
-        256 // Placeholder
-    }
-
-    fn memory_usage(&self) -> usize {
-        20 * 1024 * 1024 // ~20MB placeholder
     }
 }
 
@@ -530,8 +312,8 @@ pub struct CpuFallbackAccelerator {
     device_info: GpuDeviceInfo,
 }
 
-impl CpuFallbackAccelerator {
-    pub fn new() -> Self {
+impl Default for CpuFallbackAccelerator {
+    fn default() -> Self {
         Self {
             device_info: GpuDeviceInfo {
                 name: "CPU Fallback".to_string(),
@@ -544,6 +326,12 @@ impl CpuFallbackAccelerator {
                 max_shared_memory_kb: 0,
             },
         }
+    }
+}
+
+impl CpuFallbackAccelerator {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -597,10 +385,6 @@ impl GpuAcceleratorFactory {
                 GpuBackend::CudaTensorRT => {
                     Box::new(CudaTensorRTAccelerator::new(device.clone()))
                 }
-                #[cfg(feature = "vulkan-compute")]
-                GpuBackend::Vulkan => {
-                    Box::new(VulkanAccelerator::new(device.clone()))
-                }
                 _ => Box::new(CpuFallbackAccelerator::new()),
             }
         } else {
@@ -610,7 +394,7 @@ impl GpuAcceleratorFactory {
 
     /// Create accelerator for specific backend
     pub fn create_for_backend(backend: GpuBackend) -> Result<Box<dyn GpuAccelerator>> {
-        #[allow(unused_variables)] // caps used conditionally with feature flags
+        #[allow(unused_variables)]
         let caps = GpuCapabilities::detect();
 
         match backend {
@@ -622,15 +406,8 @@ impl GpuAcceleratorFactory {
                     Err(anyhow::anyhow!("CUDA/TensorRT not available"))
                 }
             }
-            #[cfg(feature = "vulkan-compute")]
-            GpuBackend::Vulkan => {
-                if let Some(device) = caps.devices.iter().find(|d| d.backend == backend) {
-                    Ok(Box::new(VulkanAccelerator::new(device.clone())))
-                } else {
-                    Err(anyhow::anyhow!("Vulkan compute not available"))
-                }
-            }
             GpuBackend::None => Ok(Box::new(CpuFallbackAccelerator::new())),
+            #[cfg(not(feature = "cuda-tensorrt"))]
             _ => Err(anyhow::anyhow!("Backend {:?} not supported", backend)),
         }
     }
@@ -646,7 +423,6 @@ pub fn benchmark_gpu_accelerator(accelerator: &mut dyn GpuAccelerator) -> Result
     let input: Vec<f32> = (0..TEST_SIZE).map(|i| (i as f32) * 0.001).collect();
     let mut output = vec![0.0f32; TEST_SIZE];
 
-    // Benchmark spectral denoising
     let start = Instant::now();
     for _ in 0..ITERATIONS {
         accelerator.process_spectral_denoising(&input, &mut output, 0.7)?;
@@ -676,7 +452,7 @@ pub struct GpuBenchmarkResults {
 
 impl GpuBenchmarkResults {
     pub fn report(&self) {
-        info!("🚀 GPU Acceleration Benchmark Results:");
+        info!("GPU Acceleration Benchmark Results:");
         info!("  Backend: {}", self.backend);
         info!("  Device: {}", self.device_name);
         info!("  Denoising Throughput: {:.1} MSamples/sec", self.denoising_throughput_msamples_per_sec);
@@ -684,11 +460,11 @@ impl GpuBenchmarkResults {
         info!("  Memory Usage: {} MB", self.memory_usage_mb);
 
         if self.denoising_throughput_msamples_per_sec > 50.0 {
-            info!("  ✅ Excellent GPU performance");
+            info!("  Excellent GPU performance");
         } else if self.denoising_throughput_msamples_per_sec > 20.0 {
-            info!("  ✅ Good GPU performance");
+            info!("  Good GPU performance");
         } else {
-            warn!("  ⚠️ Poor GPU performance");
+            warn!("  Poor GPU performance");
         }
     }
 }

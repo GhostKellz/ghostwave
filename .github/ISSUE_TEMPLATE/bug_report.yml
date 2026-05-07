@@ -1,0 +1,142 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in GhostWave
+title: "[Bug]: "
+labels: ["bug"]
+assignees:
+  - ghostkellz
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please run diagnostics if possible:
+
+        ```bash
+        ghostwave --doctor
+        ghostwave --verbose 2>&1 | head -50
+        ```
+
+        Paste the output in the relevant fields below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+      placeholder: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Start ghostwave with `--profile studio`
+        2. Connect microphone
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audio-backend
+    attributes:
+      label: Audio Backend
+      description: Which audio backend are you using?
+      options:
+        - PipeWire
+        - ALSA
+        - JACK
+        - CPAL
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gpu-generation
+    attributes:
+      label: NVIDIA GPU Generation
+      description: Which GPU series are you using?
+      options:
+        - RTX 5000 series (Blackwell)
+        - RTX 4000 series (Ada Lovelace)
+        - RTX 3000 series (Ampere)
+        - RTX 2000 series (Turing)
+        - GTX (no RTX)
+        - CPU only (no NVIDIA GPU)
+    validations:
+      required: true
+
+  - type: input
+    id: gpu-model
+    attributes:
+      label: GPU Model
+      description: Specific GPU model (e.g. RTX 5090, RTX 3070 Ti)
+      placeholder: RTX 5090
+    validations:
+      required: false
+
+  - type: input
+    id: driver-version
+    attributes:
+      label: NVIDIA Driver Version
+      description: Output of `nvidia-smi --query-gpu=driver_version --format=csv,noheader`
+      placeholder: "580.0"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: distro
+    attributes:
+      label: Linux Distribution
+      options:
+        - Arch Linux
+        - Fedora
+        - Ubuntu
+        - Debian
+        - openSUSE
+        - NixOS
+        - Other (specify below)
+    validations:
+      required: true
+
+  - type: input
+    id: kernel-version
+    attributes:
+      label: Kernel Version
+      description: Output of `uname -r`
+      placeholder: 6.12.1-arch1-1
+    validations:
+      required: false
+
+  - type: dropdown
+    id: wayland-compositor
+    attributes:
+      label: Wayland Compositor
+      options:
+        - KDE Plasma
+        - GNOME
+        - Hyprland
+        - Sway
+        - X11 (not Wayland)
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: Paste any relevant output from `ghostwave --verbose` or `journalctl`.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: Doctor Output
+      description: Output of `ghostwave --doctor` if available.
+      render: shell
+    validations:
+      required: false

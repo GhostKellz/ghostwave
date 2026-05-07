@@ -117,7 +117,7 @@ impl GruLayer {
         let init_weights = |size: usize| -> Vec<f32> {
             (0..size).map(|i| {
                 // Deterministic pseudo-random for reproducibility
-                let x = (i as f32 * 0.618033988749895) % 1.0;
+                let x = (i as f32 * 0.618_034) % 1.0;
                 (x - 0.5) * 2.0 * scale
             }).collect()
         };
@@ -184,10 +184,10 @@ impl GruLayer {
             let mut sum_r = self.b_r[j];
             let mut sum_h = self.b_h[j];
 
-            for i in 0..self.input_size.min(input.len()) {
-                sum_z += input[i] * self.w_z[i * h + j];
-                sum_r += input[i] * self.w_r[i * h + j];
-                sum_h += input[i] * self.w_h[i * h + j];
+            for (i, &inp) in input.iter().enumerate().take(self.input_size) {
+                sum_z += inp * self.w_z[i * h + j];
+                sum_r += inp * self.w_r[i * h + j];
+                sum_h += inp * self.w_h[i * h + j];
             }
 
             // Hidden state contribution
@@ -234,7 +234,7 @@ impl DenseLayer {
 
         let weights: Vec<f32> = (0..input_size * output_size)
             .map(|i| {
-                let x = (i as f32 * 0.618033988749895) % 1.0;
+                let x = (i as f32 * 0.618_034) % 1.0;
                 (x - 0.5) * 2.0 * scale
             })
             .collect();
@@ -262,12 +262,12 @@ impl DenseLayer {
     }
 
     fn forward(&self, input: &[f32], output: &mut [f32]) {
-        for j in 0..self.output_size {
-            let mut sum = self.bias[j];
-            for i in 0..self.input_size.min(input.len()) {
-                sum += input[i] * self.weights[i * self.output_size + j];
+        for (j, (out, &bias)) in output.iter_mut().zip(self.bias.iter()).enumerate().take(self.output_size) {
+            let mut sum = bias;
+            for (i, &inp) in input.iter().enumerate().take(self.input_size) {
+                sum += inp * self.weights[i * self.output_size + j];
             }
-            output[j] = sum;
+            *out = sum;
         }
     }
 
@@ -542,8 +542,11 @@ impl RNNoiseProcessor {
         }
 
         // Overlap-add
-        for i in 0..FRAME_SIZE {
-            output[i] = self.overlap_buffer[i] + self.ifft_output[i];
+        for (out, (&overlap, &ifft)) in output.iter_mut()
+            .zip(self.overlap_buffer.iter().zip(self.ifft_output.iter()))
+            .take(FRAME_SIZE)
+        {
+            *out = overlap + ifft;
         }
 
         // Save second half for next overlap
@@ -660,9 +663,7 @@ impl RNNoiseProcessor {
         self.dense_out.forward_sigmoid(&hidden2, &mut output);
 
         // Extract gains and VAD
-        for i in 0..NB_BANDS {
-            self.band_gains[i] = output[i];
-        }
+        self.band_gains[..NB_BANDS].copy_from_slice(&output[..NB_BANDS]);
         self.voice_probability = output[NB_BANDS];
 
         // Apply noise-aware gain adjustment

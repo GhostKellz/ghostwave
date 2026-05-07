@@ -5,11 +5,11 @@ resolver = "2"
 [package]
 name = "ghostwave"
 version = "0.3.0"
-edition = "2021"
-rust-version = "1.77"
-license = "MIT OR Apache-2.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
 description = "Professional AI-powered audio processing with RTX GPU acceleration - NVIDIA Broadcast for Linux"
-authors = ["Ghost Ecosystem <dev@ghost-ecosystem.dev>"]
+authors = ["Christopher Kelley <ckelley@ghostkellz.sh>"]
 repository = "https://github.com/ghostkellz/ghostwave"
 homepage = "https://github.com/ghostkellz/ghostwave"
 documentation = "https://docs.rs/ghostwave"
@@ -26,27 +26,24 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-pipewire = "0.8"
-cpal = "0.15"
+pipewire = "0.9"
+cpal = "0.17"
 crossbeam = "0.8"
 libc = "0.2"
-alsa = "0.8"
-jack = "0.11"
+alsa = "0.11"
+jack = "0.13"
 clap = { version = "4.0", features = ["derive"] }
 clap_complete = "4.0"
 dasp = { version = "0.11", features = ["signal", "interpolate", "ring_buffer"] }
 dirs = "5.0"
-jsonrpc-core = "18.0"
-jsonrpc-derive = "18.0"
-jsonrpc-ipc-server = "18.0"
 uuid = { version = "1.0", features = ["v4"] }
 
 # NVIDIA RTX acceleration (optional feature)
 [dependencies.cudarc]
-version = "0.11"
+version = "0.19"
 optional = true
 default-features = false
-features = ["std", "cuda-12000", "driver"]
+features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-version-from-build-system"]
 
 [features]
 default = []

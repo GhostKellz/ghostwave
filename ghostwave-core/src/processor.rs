@@ -9,9 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Audio processing profile types supported by GhostWave
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ProcessingProfile {
     /// Balanced profile for general use - good noise reduction with natural voice
+    #[default]
     Balanced,
     /// Optimized for streaming - aggressive noise reduction, optimized for microphones
     Streaming,
@@ -39,11 +40,6 @@ impl ProcessingProfile {
     }
 }
 
-impl Default for ProcessingProfile {
-    fn default() -> Self {
-        ProcessingProfile::Balanced
-    }
-}
 
 impl std::fmt::Display for ProcessingProfile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -301,7 +297,7 @@ impl ProfileParams {
 
     /// Set parameter for a specific profile
     pub fn set_profile_param(&mut self, profile: ProcessingProfile, name: String, value: ParamValue) {
-        self.params.entry(profile).or_insert_with(HashMap::new).insert(name, value);
+        self.params.entry(profile).or_default().insert(name, value);
     }
 
     /// Apply profile parameters to a processor

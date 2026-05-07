@@ -1,0 +1,84 @@
+name: Hardware Compatibility Report
+description: Report hardware that works or doesn't work with GhostWave
+title: "[Hardware]: "
+labels: ["hardware"]
+assignees:
+  - ghostkellz
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us track hardware compatibility. Report whether your setup works, partially works, or fails with GhostWave.
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: Compatibility Status
+      options:
+        - Works perfectly
+        - Works with issues
+        - Does not work
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU Model
+      placeholder: NVIDIA RTX 5090
+    validations:
+      required: true
+
+  - type: input
+    id: driver
+    attributes:
+      label: NVIDIA Driver Version
+      placeholder: "580.0"
+    validations:
+      required: true
+
+  - type: input
+    id: audio-interface
+    attributes:
+      label: Audio Interface
+      description: Your microphone or audio interface model.
+      placeholder: Focusrite Scarlett Solo 4th Gen
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audio-backend
+    attributes:
+      label: Audio Backend
+      options:
+        - PipeWire
+        - ALSA
+        - JACK
+        - CPAL
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution & Kernel
+      placeholder: Arch Linux, kernel 6.12.1
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Any relevant details about your experience -- latency, xruns, noise artifacts, etc.
+    validations:
+      required: false
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor Output
+      description: Output of `ghostwave --doctor`
+      render: shell
+    validations:
+      required: false

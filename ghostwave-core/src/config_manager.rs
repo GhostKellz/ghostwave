@@ -391,7 +391,7 @@ impl ConfigManager {
         let mut config = self.config.write()
             .map_err(|_| anyhow::anyhow!("Failed to acquire config write lock"))?;
 
-        updater(&mut *config)?;
+        updater(&mut config)?;
 
         // Auto-save if enabled
         if config.app.auto_save {
@@ -406,7 +406,7 @@ impl ConfigManager {
         let config = self.config.read()
             .map_err(|_| anyhow::anyhow!("Failed to acquire config read lock"))?;
 
-        Self::save_to_file(&*config, &self.config_path)
+        Self::save_to_file(&config, &self.config_path)
     }
 
     /// Enable hot reloading
@@ -456,33 +456,25 @@ impl ConfigManager {
     pub fn apply_env_overrides(&self) -> Result<()> {
         self.update_config(|config| {
             // Audio configuration overrides
-            if let Ok(sample_rate) = std::env::var("GHOSTWAVE_SAMPLE_RATE") {
-                if let Ok(rate) = sample_rate.parse::<u32>() {
-                    config.audio.sample_rate = rate;
-                    debug!("Applied env override: SAMPLE_RATE={}", rate);
-                }
+            if let Some(rate) = std::env::var("GHOSTWAVE_SAMPLE_RATE").ok().and_then(|s| s.parse().ok()) {
+                config.audio.sample_rate = rate;
+                debug!("Applied env override: SAMPLE_RATE={}", rate);
             }
 
-            if let Ok(buffer_size) = std::env::var("GHOSTWAVE_BUFFER_SIZE") {
-                if let Ok(size) = buffer_size.parse::<u32>() {
-                    config.audio.buffer_size = size;
-                    debug!("Applied env override: BUFFER_SIZE={}", size);
-                }
+            if let Some(size) = std::env::var("GHOSTWAVE_BUFFER_SIZE").ok().and_then(|s| s.parse().ok()) {
+                config.audio.buffer_size = size;
+                debug!("Applied env override: BUFFER_SIZE={}", size);
             }
 
-            if let Ok(channels) = std::env::var("GHOSTWAVE_CHANNELS") {
-                if let Ok(ch) = channels.parse::<u8>() {
-                    config.audio.channels = ch;
-                    debug!("Applied env override: CHANNELS={}", ch);
-                }
+            if let Some(ch) = std::env::var("GHOSTWAVE_CHANNELS").ok().and_then(|s| s.parse().ok()) {
+                config.audio.channels = ch;
+                debug!("Applied env override: CHANNELS={}", ch);
             }
 
             // Processing configuration overrides
-            if let Ok(noise_strength) = std::env::var("GHOSTWAVE_NOISE_STRENGTH") {
-                if let Ok(strength) = noise_strength.parse::<f32>() {
-                    config.noise_suppression.strength = strength;
-                    debug!("Applied env override: NOISE_STRENGTH={}", strength);
-                }
+            if let Some(strength) = std::env::var("GHOSTWAVE_NOISE_STRENGTH").ok().and_then(|s| s.parse().ok()) {
+                config.noise_suppression.strength = strength;
+                debug!("Applied env override: NOISE_STRENGTH={}", strength);
             }
 
             // Log level override

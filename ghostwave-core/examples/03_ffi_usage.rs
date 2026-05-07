@@ -14,8 +14,9 @@ fn main() {
     println!("Library version: {}", version.to_str().unwrap());
 
     // Create processor
+    // SAFETY: handle is properly initialized and passed as mutable pointer
     let mut handle = GhostWaveHandle::null();
-    let err = ghostwave_create(&mut handle, 48000, 1, 256);
+    let err = unsafe { ghostwave_create(&mut handle, 48000, 1, 256) };
 
     if err.code != 0 {
         let msg = String::from_utf8_lossy(&err.message);
@@ -43,10 +44,11 @@ fn main() {
     }
 
     // Process audio
+    // SAFETY: input and output buffers are properly sized and aligned
     let input = vec![0.1f32; 256];
     let mut output = vec![0.0f32; 256];
 
-    let err = ghostwave_process(handle, input.as_ptr(), output.as_mut_ptr(), 256);
+    let err = unsafe { ghostwave_process(handle, input.as_ptr(), output.as_mut_ptr(), 256) };
 
     if err.code == 0 {
         println!("Processed 256 samples successfully");

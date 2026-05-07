@@ -54,22 +54,16 @@ impl Config {
         };
 
         // Apply environment variable overrides
-        if let Ok(sample_rate) = std::env::var("GHOSTWAVE_SAMPLE_RATE") {
-            if let Ok(rate) = sample_rate.parse::<u32>() {
-                config.audio.sample_rate = rate;
-            }
+        if let Some(rate) = std::env::var("GHOSTWAVE_SAMPLE_RATE").ok().and_then(|s| s.parse().ok()) {
+            config.audio.sample_rate = rate;
         }
 
-        if let Ok(buffer_size) = std::env::var("GHOSTWAVE_FRAMES") {
-            if let Ok(frames) = buffer_size.parse::<u32>() {
-                config.audio.buffer_size = frames;
-            }
+        if let Some(frames) = std::env::var("GHOSTWAVE_FRAMES").ok().and_then(|s| s.parse().ok()) {
+            config.audio.buffer_size = frames;
         }
 
-        if let Ok(channels) = std::env::var("GHOSTWAVE_CHANNELS") {
-            if let Ok(ch) = channels.parse::<u8>() {
-                config.audio.channels = ch;
-            }
+        if let Some(ch) = std::env::var("GHOSTWAVE_CHANNELS").ok().and_then(|s| s.parse().ok()) {
+            config.audio.channels = ch;
         }
 
         Ok(config)

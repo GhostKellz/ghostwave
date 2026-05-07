@@ -270,9 +270,9 @@ impl PipeWireModule {
     pub fn create_filter_node(&self) -> Result<()> {
         info!("Creating PipeWire filter node: {}", self.pipewire_config.node_name);
 
-        let main_loop = pw::main_loop::MainLoop::new(None)
+        let main_loop = pw::main_loop::MainLoopBox::new(None)
             .context("Failed to create PipeWire main loop")?;
-        let context = pw::context::Context::new(&main_loop)
+        let context = pw::context::ContextBox::new(main_loop.loop_(), None)
             .context("Failed to create PipeWire context")?;
         let _core = context.connect(None)
             .context("Failed to connect to PipeWire")?;
@@ -381,6 +381,8 @@ impl PipeWireModule {
 
     /// Run using the real AudioStream from ghostwave_core
     async fn run_with_audio_stream(&mut self) -> Result<()> {
+        use std::sync::atomic::AtomicU64;
+
         let stream = self.audio_stream.as_mut()
             .ok_or_else(|| anyhow::anyhow!("AudioStream not initialized"))?;
 
@@ -388,18 +390,16 @@ impl PipeWireModule {
 
         // Set up the audio processing callback
         let processor = self.processor.clone();
-        let latency_monitor = self.latency_monitor.clone();
         let sample_rate = self.pipewire_config.sample_rate;
         let buffer_size = self.pipewire_config.buffer_size;
-        let frame_duration = Duration::from_micros(
-            (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64,
-        );
+        let frame_duration_us = (buffer_size as f64 / sample_rate as f64 * 1_000_000.0) as u64;
 
-        // Create thread-local stats tracking for the callback
-        let frames_processed = Arc::new(Mutex::new(0u64));
-        let xruns = Arc::new(Mutex::new(0u64));
-        let total_processing_time_us = Arc::new(Mutex::new(0u64));
-        let peak_processing_time_us = Arc::new(Mutex::new(0u64));
+        // Use atomics for lock-free stats in the real-time audio callback
+        // This avoids priority inversion and latency spikes from Mutex
+        let frames_processed = Arc::new(AtomicU64::new(0));
+        let xruns = Arc::new(AtomicU64::new(0));
+        let total_processing_time_us = Arc::new(AtomicU64::new(0));
+        let peak_processing_time_us = Arc::new(AtomicU64::new(0));
 
         let frames_clone = frames_processed.clone();
         let xruns_clone = xruns.clone();
@@ -411,44 +411,43 @@ impl PipeWireModule {
             let start = Instant::now();
 
             // Process audio through our noise processor
-            if let Ok(mut proc) = processor.lock() {
-                if let Err(e) = proc.process(input, output) {
-                    error!("Audio processing error: {}", e);
-                    output.copy_from_slice(input); // Pass through on error
+            // Use try_lock() to avoid blocking in the RT callback - pass through if lock unavailable
+            match processor.try_lock() {
+                Ok(mut proc) => {
+                    if let Err(_e) = proc.process(input, output) {
+                        // On error, pass through (don't log in RT callback)
+                        output.copy_from_slice(input);
+                    }
                 }
-            } else {
-                // If lock fails, pass through
-                output.copy_from_slice(input);
-            }
-
-            let processing_time = start.elapsed();
-            let processing_us = processing_time.as_micros() as u64;
-
-            // Update frame count
-            if let Ok(mut f) = frames_clone.lock() {
-                *f += 1;
-            }
-
-            // Update timing stats
-            if let Ok(mut t) = total_time_clone.lock() {
-                *t += processing_us;
-            }
-            if let Ok(mut p) = peak_time_clone.lock() {
-                if processing_us > *p {
-                    *p = processing_us;
+                Err(_) => {
+                    // Lock contention - pass through to maintain real-time guarantees
+                    output.copy_from_slice(input);
                 }
             }
 
-            // Detect xruns
-            if processing_time > frame_duration {
-                if let Ok(mut x) = xruns_clone.lock() {
-                    *x += 1;
+            let processing_us = start.elapsed().as_micros() as u64;
+
+            // Lock-free stats updates using atomics (no blocking!)
+            frames_clone.fetch_add(1, Ordering::Relaxed);
+            total_time_clone.fetch_add(processing_us, Ordering::Relaxed);
+
+            // Update peak using compare-and-swap loop
+            let mut current_peak = peak_time_clone.load(Ordering::Relaxed);
+            while processing_us > current_peak {
+                match peak_time_clone.compare_exchange_weak(
+                    current_peak,
+                    processing_us,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => current_peak = actual,
                 }
             }
 
-            // Record in latency monitor
-            if let Ok(mut monitor) = latency_monitor.lock() {
-                monitor.record_processing_time(processing_time);
+            // Detect xruns (processing took longer than frame duration)
+            if processing_us > frame_duration_us {
+                xruns_clone.fetch_add(1, Ordering::Relaxed);
             }
         });
 
@@ -475,7 +474,7 @@ impl PipeWireModule {
             info!("   Use 'pw-cli ls Node' to verify, 'qpwgraph' or 'pw-link' to connect");
         }
 
-        // Update stats periodically while running
+        // Update stats periodically while running (using lock-free atomic reads)
         let stats_ref = self.stats.clone();
         let stop_flag = self.stop_flag.clone();
 
@@ -483,12 +482,13 @@ impl PipeWireModule {
             while !stop_flag.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(100));
 
-                // Update shared stats from callback counters
-                let frames = *frames_processed.lock().unwrap();
-                let xrun_count = *xruns.lock().unwrap();
-                let total_time = *total_processing_time_us.lock().unwrap();
-                let peak_time = *peak_processing_time_us.lock().unwrap();
+                // Read stats using lock-free atomics
+                let frames = frames_processed.load(Ordering::Relaxed);
+                let xrun_count = xruns.load(Ordering::Relaxed);
+                let total_time = total_processing_time_us.load(Ordering::Relaxed);
+                let peak_time = peak_processing_time_us.load(Ordering::Relaxed);
 
+                // Only lock the stats struct for writing (non-RT thread, so OK)
                 if let Ok(mut s) = stats_ref.lock() {
                     s.frames_processed = frames;
                     s.xruns = xrun_count;
@@ -679,6 +679,15 @@ pub async fn run_with_preset(
     info!("Starting GhostWave as native PipeWire module");
     info!("This provides low-latency integration with your audio system");
 
+    // Start IPC server in background for PhantomLink integration
+    let ipc_config = config.clone();
+    let ipc_handle = tokio::spawn(async move {
+        info!("🔌 Starting IPC server for PhantomLink integration");
+        if let Err(e) = crate::ipc::run_ipc_server(ipc_config).await {
+            tracing::warn!("IPC server error: {}", e);
+        }
+    });
+
     // Create module with preset or processing mode if specified
     let mut module = if let Some(preset) = preset {
         info!("Using PipeWire preset: {}", preset);
@@ -719,6 +728,10 @@ pub async fn run_with_preset(
         .run_event_loop()
         .await
         .with_context(|| "PipeWire event loop failed")?;
+
+    // Stop IPC server
+    ipc_handle.abort();
+    info!("IPC server stopped");
 
     // Report final stats
     let stats = module.get_stats();

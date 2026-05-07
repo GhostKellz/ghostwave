@@ -27,6 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use tracing::{info, warn, debug};
 
+/// Type alias for audio processing callback function
+type ProcessCallback = Box<dyn FnMut(&[f32], &mut [f32]) + Send>;
+
 #[cfg(feature = "pipewire-backend")]
 use pipewire as pw;
 
@@ -321,8 +324,8 @@ impl NodeProperties {
     }
 
     #[cfg(feature = "pipewire-backend")]
-    pub fn to_pipewire_properties(&self) -> Result<pw::properties::Properties> {
-        let mut pw_props = pw::properties::Properties::new();
+    pub fn to_pipewire_properties(&self) -> Result<pw::properties::PropertiesBox> {
+        let mut pw_props = pw::properties::PropertiesBox::default();
         for (key, value) in &self.properties {
             pw_props.insert(key.as_str(), value.as_str());
         }
@@ -340,19 +343,14 @@ impl NodeProperties {
 // ============================================================================
 
 /// Stream state for PipeWire audio processing
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamState {
+    #[default]
     Unconnected,
     Connecting,
     Paused,
     Streaming,
     Error,
-}
-
-impl Default for StreamState {
-    fn default() -> Self {
-        StreamState::Unconnected
-    }
 }
 
 impl std::fmt::Display for StreamState {
@@ -533,7 +531,7 @@ pub struct AudioStream {
     playback_buffer: Arc<Mutex<Vec<f32>>>,
 
     // Processing callback
-    process_callback: Arc<Mutex<Option<Box<dyn FnMut(&[f32], &mut [f32]) + Send>>>>,
+    process_callback: Arc<Mutex<Option<ProcessCallback>>>,
 
     // Thread handle for PipeWire main loop
     thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -663,14 +661,14 @@ impl AudioStream {
         stats: Arc<Mutex<StreamStats>>,
         capture_buffer: Arc<Mutex<Vec<f32>>>,
         playback_buffer: Arc<Mutex<Vec<f32>>>,
-        process_callback: Arc<Mutex<Option<Box<dyn FnMut(&[f32], &mut [f32]) + Send>>>>,
+        process_callback: Arc<Mutex<Option<ProcessCallback>>>,
         stop_flag: Arc<std::sync::atomic::AtomicBool>,
         node_id: Arc<Mutex<Option<u32>>>,
     ) {
         #[cfg(feature = "pipewire-backend")]
         {
             use std::sync::atomic::Ordering;
-            use pw::stream::{Stream, StreamFlags, StreamState as PwStreamState};
+            use pw::stream::{StreamBox, StreamFlags, StreamState as PwStreamState};
             use pw::properties::properties;
 
             // Initialize PipeWire
@@ -679,7 +677,7 @@ impl AudioStream {
             info!("Initializing PipeWire stream node...");
 
             // Create the main loop
-            let main_loop = match pw::main_loop::MainLoop::new(None) {
+            let main_loop = match pw::main_loop::MainLoopBox::new(None) {
                 Ok(ml) => ml,
                 Err(e) => {
                     warn!("Failed to create PipeWire main loop: {}", e);
@@ -688,7 +686,7 @@ impl AudioStream {
                 }
             };
 
-            let context = match pw::context::Context::new(&main_loop) {
+            let context = match pw::context::ContextBox::new(main_loop.loop_(), None) {
                 Ok(ctx) => ctx,
                 Err(e) => {
                     warn!("Failed to create PipeWire context: {}", e);
@@ -719,7 +717,7 @@ impl AudioStream {
             };
 
             // Create the stream
-            let stream = match Stream::new(&core, "ghostwave-stream", props) {
+            let stream = match StreamBox::new(&core, "ghostwave-stream", props) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!("Failed to create PipeWire stream: {}", e);
@@ -735,7 +733,7 @@ impl AudioStream {
                 stats: Arc<Mutex<StreamStats>>,
                 capture_buffer: Arc<Mutex<Vec<f32>>>,
                 playback_buffer: Arc<Mutex<Vec<f32>>>,
-                process_callback: Arc<Mutex<Option<Box<dyn FnMut(&[f32], &mut [f32]) + Send>>>>,
+                process_callback: Arc<Mutex<Option<ProcessCallback>>>,
                 node_id: Arc<Mutex<Option<u32>>>,
             }
 
@@ -767,11 +765,11 @@ impl AudioStream {
                     }
 
                     // Capture node ID when streaming starts
-                    if matches!(new_state, PwStreamState::Streaming) {
-                        if let Ok(mut id) = user_data.node_id.lock() {
-                            *id = Some(stream.node_id());
-                            info!("GhostWave stream node ID: {}", stream.node_id());
-                        }
+                    if matches!(new_state, PwStreamState::Streaming)
+                        && let Ok(mut id) = user_data.node_id.lock()
+                    {
+                        *id = Some(stream.node_id());
+                        info!("GhostWave stream node ID: {}", stream.node_id());
                     }
                 })
                 .process(|stream, user_data| {
@@ -789,6 +787,7 @@ impl AudioStream {
                             if let Some(slice) = data.data() {
                                 let samples: &mut [f32] = bytemuck::cast_slice_mut(slice);
                                 let num_samples = samples.len();
+                                let samples_byte_size = std::mem::size_of_val(samples);
 
                                 // Get input from capture buffer or use incoming data
                                 let input_data: Vec<f32> = {
@@ -818,17 +817,17 @@ impl AudioStream {
                                 samples.copy_from_slice(&output_data);
 
                                 // Update playback buffer for external access
-                                if let Ok(mut buf) = user_data.playback_buffer.lock() {
-                                    if buf.len() >= num_samples {
-                                        buf[..num_samples].copy_from_slice(&output_data);
-                                    }
+                                if let Ok(mut buf) = user_data.playback_buffer.lock()
+                                    && let Some(dst) = buf.get_mut(..num_samples)
+                                {
+                                    dst.copy_from_slice(&output_data);
                                 }
 
                                 // Set chunk size
                                 let chunk = data.chunk_mut();
                                 *chunk.offset_mut() = 0;
                                 *chunk.stride_mut() = std::mem::size_of::<f32>() as i32;
-                                *chunk.size_mut() = (num_samples * std::mem::size_of::<f32>()) as u32;
+                                *chunk.size_mut() = samples_byte_size as u32;
 
                                 // Update statistics
                                 if let Ok(mut s) = user_data.stats.lock() {
@@ -1121,8 +1120,8 @@ pub enum DeviceEvent {
     DefaultChanged(String),
 }
 
-impl DeviceManager {
-    pub fn new() -> Self {
+impl Default for DeviceManager {
+    fn default() -> Self {
         Self {
             devices: HashMap::new(),
             preferred_devices: vec![
@@ -1136,6 +1135,12 @@ impl DeviceManager {
             auto_switch: false,
             event_sender: None,
         }
+    }
+}
+
+impl DeviceManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn set_preferred_devices(&mut self, devices: Vec<String>) {
@@ -1220,11 +1225,9 @@ impl DeviceManager {
 
         // First try preferred devices in order
         for preferred in &self.preferred_devices {
-            if let Some(device) = self.devices.get(preferred) {
-                if device.is_input && device.priority > best_priority {
-                    best_device = Some(device);
-                    best_priority = device.priority;
-                }
+            if let Some(device) = self.devices.get(preferred).filter(|d| d.is_input && d.priority > best_priority) {
+                best_device = Some(device);
+                best_priority = device.priority;
             }
         }
 
@@ -1266,10 +1269,8 @@ impl DeviceManager {
             self.current_device = Some(device_name.clone());
             info!("🔧 Forced audio device selection: {}", device_name);
 
-            if let Some(device) = self.devices.get(&device_name) {
-                if let Some(ref sender) = self.event_sender {
-                    let _ = sender.send(DeviceEvent::DeviceChanged(device.clone()));
-                }
+            if let (Some(device), Some(sender)) = (self.devices.get(&device_name), &self.event_sender) {
+                let _ = sender.send(DeviceEvent::DeviceChanged(device.clone()));
             }
 
             Ok(())

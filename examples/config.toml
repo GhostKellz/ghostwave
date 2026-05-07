@@ -2,7 +2,7 @@
 # This is a comprehensive example showing all available configuration options
 
 [app]
-version = "1.0.0"
+version = "0.3.0"
 active_profile = "balanced"
 auto_save = true
 hot_reload = true

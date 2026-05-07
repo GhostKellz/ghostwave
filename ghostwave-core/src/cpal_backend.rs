@@ -9,10 +9,7 @@ use cpal::traits::HostTrait;
 #[cfg(feature = "cpal-backend")]
 pub fn check_cpal_availability() -> bool {
     let host = cpal::default_host();
-    match host.default_input_device() {
-        Some(_) => true,
-        None => false,
-    }
+    host.default_input_device().is_some()
 }
 
 #[cfg(not(feature = "cpal-backend"))]

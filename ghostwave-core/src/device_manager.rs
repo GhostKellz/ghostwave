@@ -11,6 +11,9 @@ use tokio::time;
 use tracing::{info, warn, debug};
 use crate::device_detection::{DeviceDetector, AudioDevice, AudioDeviceType};
 
+/// Type alias for hotplug callback function
+type HotplugCallback = Box<dyn Fn(&HotplugEvent) + Send + Sync>;
+
 /// Device selection criteria and preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceSelectionConfig {
@@ -112,7 +115,7 @@ pub struct DeviceManager {
     detector: DeviceDetector,
     current_device: Arc<Mutex<Option<AudioDevice>>>,
     pending_events: Arc<Mutex<Vec<(Instant, HotplugEvent)>>>,
-    hotplug_callbacks: Arc<Mutex<Vec<Box<dyn Fn(&HotplugEvent) + Send + Sync>>>>,
+    hotplug_callbacks: Arc<Mutex<Vec<HotplugCallback>>>,
     is_monitoring: Arc<Mutex<bool>>,
 }
 
@@ -378,13 +381,11 @@ impl DeviceManager {
                                     *current_device.lock().unwrap() = Some(new_device.clone());
                                 }
                             }
-                        } else if let HotplugEvent::DeviceDisconnected(ref name) = event {
-                            if let Some(current) = current_device.lock().unwrap().as_ref() {
-                                if current.name == *name {
-                                    warn!("⚠️ Current device disconnected, will need to re-select");
-                                    *current_device.lock().unwrap() = None;
-                                }
-                            }
+                        } else if let HotplugEvent::DeviceDisconnected(ref name) = event
+                            && current_device.lock().unwrap().as_ref().is_some_and(|current| current.name == *name)
+                        {
+                            warn!("⚠️ Current device disconnected, will need to re-select");
+                            *current_device.lock().unwrap() = None;
                         }
                     }
 
@@ -527,15 +528,14 @@ impl DeviceManager {
 }
 
 /// Device manager configuration builder
+#[derive(Default)]
 pub struct DeviceManagerBuilder {
     config: DeviceSelectionConfig,
 }
 
 impl DeviceManagerBuilder {
     pub fn new() -> Self {
-        Self {
-            config: DeviceSelectionConfig::default(),
-        }
+        Self::default()
     }
 
     pub fn prefer_xlr(mut self, prefer: bool) -> Self {

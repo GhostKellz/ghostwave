@@ -3,7 +3,7 @@ name = "ghostwave-core"
 version = "0.3.0"
 edition = "2024"
 description = "Core audio processing library for GhostWave - Linux RTX Voice"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 repository = "https://github.com/ghostkellz/ghostwave"
 keywords = ["audio", "noise-cancellation", "rtx", "linux", "real-time"]
 categories = ["multimedia::audio", "api-bindings"]
@@ -24,9 +24,6 @@ dirs = "5.0"
 libc = "0.2"
 notify = "6.0"
 tokio = { version = "1.0", features = ["full"] }
-jsonrpc-core = "18.0"
-jsonrpc-derive = "18.0"
-jsonrpc-ipc-server = "18.0"
 uuid = { version = "1.0", features = ["v4"] }
 
 # DSP and signal processing
@@ -37,6 +34,7 @@ num-traits = "0.2"
 
 # Neural network inference
 ndarray = { version = "0.16", features = ["rayon"] }
+nnnoiseless = "0.3"
 ort = { version = "2.0.0-rc.10", optional = true, default-features = false, features = ["load-dynamic"] }
 
 # SIMD acceleration
@@ -44,14 +42,14 @@ wide = "0.7"
 bytemuck = { version = "1.14", features = ["derive"] }
 
 # Optional features for different backends
-pipewire = { version = "0.8", optional = true }
-libspa = { version = "0.8", optional = true }
-alsa = { version = "0.8", optional = true }
-jack = { version = "0.11", optional = true }
-cpal = { version = "0.15", optional = true }
+pipewire = { version = "0.9", optional = true }
+libspa = { version = "0.9", optional = true }
+alsa = { version = "0.11", optional = true }
+jack = { version = "0.13", optional = true }
+cpal = { version = "0.17", optional = true }
 
 # NVIDIA RTX acceleration (optional compile-time)
-cudarc = { version = "0.11", optional = true, default-features = false, features = ["std", "cuda-12000", "driver"] }
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-version-from-build-system"] }
 
 # Dynamic library loading for runtime CUDA detection
 libloading = "0.8"
@@ -68,14 +66,12 @@ cpal-backend = ["cpal"]
 # GPU acceleration
 nvidia-rtx = ["cudarc"]
 cuda-tensorrt = ["cudarc"]
-vulkan-compute = []
-opencl = []
 
 # ONNX Runtime inference
 onnx-inference = ["ort"]
 
 # All features
-full = ["pipewire-backend", "alsa-backend", "jack-backend", "cpal-backend", "nvidia-rtx", "cuda-tensorrt", "vulkan-compute", "onnx-inference"]
+full = ["pipewire-backend", "alsa-backend", "jack-backend", "cpal-backend", "nvidia-rtx", "cuda-tensorrt", "onnx-inference"]
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -89,4 +85,8 @@ harness = false
 
 [[bench]]
 name = "throughput"
+harness = false
+
+[[bench]]
+name = "gpu_vs_cpu"
 harness = false

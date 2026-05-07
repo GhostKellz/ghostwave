@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{info, debug, warn};
 
 #[cfg(feature = "nvidia-rtx")]
-use cudarc::driver::{CudaDevice, CudaSlice};
+use cudarc::driver::{CudaContext, CudaSlice};
 
 use realfft::{RealFftPlanner, RealToComplex, ComplexToReal};
 use num_complex::Complex32;
@@ -201,7 +201,7 @@ impl GpuArch {
 #[cfg(feature = "nvidia-rtx")]
 #[allow(dead_code)] // Fields accessed via FFI/introspection
 pub struct GpuContext {
-    device: Arc<CudaDevice>,
+    device: Arc<CudaContext>,
     arch: GpuArch,
     compute_major: i32,
     compute_minor: i32,
@@ -212,18 +212,18 @@ pub struct GpuContext {
 #[cfg(feature = "nvidia-rtx")]
 impl GpuContext {
     pub fn new(device_id: usize) -> Result<Self> {
-        let device = CudaDevice::new(device_id)?;
+        let device = CudaContext::new(device_id)?;
 
         let major = device.attribute(
             cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR
-        )? as i32;
+        )?;
         let minor = device.attribute(
             cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR
-        )? as i32;
+        )?;
 
         let arch = GpuArch::from_compute_capability(major, minor);
 
-        let (free, total) = cudarc::driver::result::mem_get_info()?;
+        let (free, total) = device.mem_get_info()?;
         let name = device.name()?;
 
         info!("GPU Context initialized: {} (SM {}.{})", name, major, minor);
@@ -249,7 +249,7 @@ impl GpuContext {
         self.arch
     }
 
-    pub fn device(&self) -> &Arc<CudaDevice> {
+    pub fn device(&self) -> &Arc<CudaContext> {
         &self.device
     }
 }
@@ -257,7 +257,7 @@ impl GpuContext {
 /// GPU-allocated audio buffer with real CUDA memory
 #[cfg(feature = "nvidia-rtx")]
 pub struct GpuAudioBuffer {
-    device: Arc<CudaDevice>,
+    device: Arc<CudaContext>,
     buffer: CudaSlice<f32>,
     sample_count: usize,
 }
@@ -265,8 +265,8 @@ pub struct GpuAudioBuffer {
 #[cfg(feature = "nvidia-rtx")]
 impl GpuAudioBuffer {
     /// Allocate a new GPU buffer
-    pub fn new(device: Arc<CudaDevice>, sample_count: usize) -> Result<Self> {
-        let buffer = device.alloc_zeros::<f32>(sample_count)?;
+    pub fn new(device: Arc<CudaContext>, sample_count: usize) -> Result<Self> {
+        let buffer = device.default_stream().alloc_zeros::<f32>(sample_count)?;
 
         debug!("Allocated GPU buffer: {} samples ({} bytes)",
                sample_count, sample_count * 4);
@@ -285,7 +285,7 @@ impl GpuAudioBuffer {
                                        data.len(), self.sample_count));
         }
 
-        self.device.htod_sync_copy_into(data, &mut self.buffer)?;
+        self.device.default_stream().memcpy_htod(data, &mut self.buffer)?;
         Ok(())
     }
 
@@ -295,7 +295,7 @@ impl GpuAudioBuffer {
             return Err(anyhow::anyhow!("Output buffer too small"));
         }
 
-        let gpu_data = self.device.dtoh_sync_copy(&self.buffer)?;
+        let gpu_data = self.device.default_stream().clone_dtoh(&self.buffer)?;
         data[..gpu_data.len()].copy_from_slice(&gpu_data);
         Ok(())
     }
@@ -313,13 +313,17 @@ impl GpuAudioBuffer {
     pub fn len(&self) -> usize {
         self.sample_count
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.sample_count == 0
+    }
 }
 
 /// GPU FFT context using real FFT on CPU with GPU spectral processing
 #[cfg(feature = "nvidia-rtx")]
 #[allow(dead_code)] // Fields used for GPU operations
 pub struct GpuFftContext {
-    device: Arc<CudaDevice>,
+    device: Arc<CudaContext>,
     fft_size: usize,
     freq_bins: usize,
 
@@ -342,7 +346,7 @@ pub struct GpuFftContext {
 
 #[cfg(feature = "nvidia-rtx")]
 impl GpuFftContext {
-    pub fn new(device: Arc<CudaDevice>, fft_size: usize) -> Result<Self> {
+    pub fn new(device: Arc<CudaContext>, fft_size: usize) -> Result<Self> {
         let freq_bins = fft_size / 2 + 1;
 
         let mut planner = RealFftPlanner::<f32>::new();
@@ -381,13 +385,8 @@ impl GpuFftContext {
         self.fft_forward.process_with_scratch(&mut self.time_buffer, &mut self.freq_buffer, &mut self.scratch)?;
 
         // Extract magnitude and phase, upload to GPU
-        let mut magnitude = vec![0.0f32; self.freq_bins];
-        let mut phase = vec![0.0f32; self.freq_bins];
-
-        for (i, c) in self.freq_buffer.iter().enumerate() {
-            magnitude[i] = c.norm();
-            phase[i] = c.arg();
-        }
+        let magnitude: Vec<f32> = self.freq_buffer.iter().map(|c| c.norm()).collect();
+        let phase: Vec<f32> = self.freq_buffer.iter().map(|c| c.arg()).collect();
 
         self.gpu_magnitude.upload(&magnitude)?;
         self.gpu_phase.upload(&phase)?;
@@ -412,9 +411,12 @@ impl GpuFftContext {
         self.gpu_phase.download(&mut phase)?;
 
         // Apply gains and reconstruct complex spectrum
-        for i in 0..self.freq_bins {
-            let mag = magnitude[i] * gains[i];
-            self.freq_buffer[i] = Complex32::from_polar(mag, phase[i]);
+        for ((fb, &g), (&m, &p)) in self.freq_buffer.iter_mut()
+            .zip(gains.iter())
+            .zip(magnitude.iter().zip(phase.iter()))
+        {
+            let mag = m * g;
+            *fb = Complex32::from_polar(mag, p);
         }
 
         // Execute inverse FFT
@@ -422,8 +424,8 @@ impl GpuFftContext {
 
         // Normalize and copy to output
         let scale = 1.0 / self.fft_size as f32;
-        for (i, &sample) in self.time_buffer.iter().enumerate() {
-            output[i] = sample * scale;
+        for (out, &sample) in output.iter_mut().zip(self.time_buffer.iter()) {
+            *out = sample * scale;
         }
 
         Ok(())
@@ -497,15 +499,15 @@ impl CpuFftContext {
 
     pub fn inverse(&mut self, output: &mut [f32]) -> Result<()> {
         // Apply gains
-        for (i, c) in self.freq_buffer.iter_mut().enumerate() {
-            *c *= self.gains[i];
+        for (c, &g) in self.freq_buffer.iter_mut().zip(self.gains.iter()) {
+            *c *= g;
         }
 
         self.fft_inverse.process_with_scratch(&mut self.freq_buffer, &mut self.time_buffer, &mut self.scratch)?;
 
         let scale = 1.0 / self.fft_size as f32;
-        for (i, &sample) in self.time_buffer.iter().enumerate() {
-            output[i] = sample * scale;
+        for (out, &sample) in output.iter_mut().zip(self.time_buffer.iter()) {
+            *out = sample * scale;
         }
 
         Ok(())
@@ -558,15 +560,17 @@ impl NoiseProfile {
         self.frame_count += 1;
         let n = self.frame_count as f32;
 
-        for i in 0..freq_bins {
-            let old_mean = self.noise_floor[i];
-            let new_val = magnitude_spectrum[i];
-            self.noise_floor[i] = old_mean + (new_val - old_mean) / n;
+        for ((&new_val, nf), nv) in magnitude_spectrum.iter()
+            .zip(self.noise_floor.iter_mut())
+            .zip(self.noise_variance.iter_mut())
+        {
+            let old_mean = *nf;
+            *nf = old_mean + (new_val - old_mean) / n;
 
             if self.frame_count > 1 {
                 let delta = new_val - old_mean;
-                let delta2 = new_val - self.noise_floor[i];
-                self.noise_variance[i] += delta * delta2;
+                let delta2 = new_val - *nf;
+                *nv += delta * delta2;
             }
         }
 
@@ -902,43 +906,42 @@ impl RtxDenoiser {
     }
 
     fn calculate_spectral_gate_gains(&self, magnitude: &[f32]) -> Result<Vec<f32>> {
-        let freq_bins = magnitude.len();
         let threshold_db = self.config.strength.threshold_db();
         let reduction = self.config.strength.reduction_factor();
 
-        let mut gains = vec![1.0_f32; freq_bins];
-
-        for i in 0..freq_bins {
+        let gains: Vec<f32> = magnitude.iter().enumerate().map(|(i, &mag)| {
             let threshold = self.noise_profile.get_threshold(i, threshold_db);
 
-            if magnitude[i] < threshold {
-                gains[i] = 1.0 - reduction;
-            } else if magnitude[i] < threshold * 2.0 {
-                let ratio = (magnitude[i] - threshold) / threshold.max(1e-10);
-                gains[i] = 1.0 - reduction * (1.0 - ratio);
+            if mag < threshold {
+                1.0 - reduction
+            } else if mag < threshold * 2.0 {
+                let ratio = (mag - threshold) / threshold.max(1e-10);
+                1.0 - reduction * (1.0 - ratio)
+            } else {
+                1.0
             }
-        }
+        }).collect();
 
         Ok(gains)
     }
 
     fn calculate_wiener_gains(&self, magnitude: &[f32]) -> Result<Vec<f32>> {
-        let freq_bins = magnitude.len();
-        let mut gains = vec![1.0_f32; freq_bins];
+        let gains: Vec<f32> = magnitude.iter()
+            .zip(self.noise_profile.noise_floor.iter())
+            .map(|(&mag, &nf)| {
+                let signal_power = mag * mag;
+                let noise_power = nf * nf;
 
-        for i in 0..freq_bins {
-            let signal_power = magnitude[i] * magnitude[i];
-            let noise_power = self.noise_profile.noise_floor[i] * self.noise_profile.noise_floor[i];
+                let gain = if signal_power > 1e-10 {
+                    (1.0 - noise_power / signal_power).max(0.0)
+                } else {
+                    0.0
+                };
 
-            if signal_power > 1e-10 {
-                gains[i] = (1.0 - noise_power / signal_power).max(0.0);
-            } else {
-                gains[i] = 0.0;
-            }
-
-            // Floor to prevent musical noise
-            gains[i] = gains[i].max(0.1);
-        }
+                // Floor to prevent musical noise
+                gain.max(0.1)
+            })
+            .collect();
 
         Ok(gains)
     }
@@ -955,29 +958,33 @@ impl RtxDenoiser {
 
         // FP4 allows more aggressive processing with less artifacts
         let fp4_boost = 1.15; // 15% more aggressive with FP4 precision
+        let boosted_reduction = (reduction * fp4_boost).min(0.98);
+        let preserve_voice = self.config.preserve_voice;
+        let sample_rate = self.config.sample_rate;
 
-        let mut gains = vec![1.0_f32; freq_bins];
-
-        for i in 0..freq_bins {
+        let gains: Vec<f32> = magnitude.iter().enumerate().map(|(i, &mag)| {
             let threshold = self.noise_profile.get_threshold(i, threshold_db);
-            let boosted_reduction = (reduction * fp4_boost).min(0.98);
 
-            if magnitude[i] < threshold {
-                gains[i] = 1.0 - boosted_reduction;
-            } else if magnitude[i] < threshold * 2.5 {
+            let mut gain = if mag < threshold {
+                1.0 - boosted_reduction
+            } else if mag < threshold * 2.5 {
                 // Smoother transition for FP4
-                let ratio = (magnitude[i] - threshold) / (threshold * 1.5).max(1e-10);
-                gains[i] = 1.0 - boosted_reduction * (1.0 - ratio.min(1.0));
-            }
+                let ratio = (mag - threshold) / (threshold * 1.5).max(1e-10);
+                1.0 - boosted_reduction * (1.0 - ratio.min(1.0))
+            } else {
+                1.0
+            };
 
             // Voice preservation for frequencies 80Hz-4kHz
-            if self.config.preserve_voice {
-                let freq = i as f32 * self.config.sample_rate as f32 / (freq_bins * 2) as f32;
+            if preserve_voice {
+                let freq = i as f32 * sample_rate as f32 / (freq_bins * 2) as f32;
                 if freq > 80.0 && freq < 4000.0 {
-                    gains[i] = gains[i].max(0.3);
+                    gain = gain.max(0.3);
                 }
             }
-        }
+
+            gain
+        }).collect();
 
         Ok(gains)
     }

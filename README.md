@@ -1,285 +1,226 @@
-# GhostWave 🎧⚡
-
-<div align="center">
+<p align="center">
   <img src="assets/ghostwave-logo.png" alt="GhostWave Logo" width="256" height="256">
+</p>
 
-  **NVIDIA RTX Voice–powered Noise Suppression for Linux**
-  _Wayland-ready · Low-latency · Built for creators & gamers_
+<h1 align="center">GhostWave</h1>
 
-  [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/ghostkellz/ghostwave)
-  [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
-  [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
-  [![NVIDIA RTX](https://img.shields.io/badge/NVIDIA-RTX%20Optimized-76B900.svg)](https://developer.nvidia.com/rtx)
-</div>
+<p align="center">
+  <strong>NVIDIA RTX Voice-Powered Noise Suppression for Linux</strong><br>
+  <em>Wayland-ready | Low-latency | Built for creators & gamers</em>
+</p>
 
-## DISCLAIMER
-
-⚠️ **EXPERIMENTAL LIBRARY - FOR LAB/PERSONAL USE** ⚠️
-This is an experimental library under active development. It is
-intended for research, learning, and personal projects. The API is subject
-to change!
-
----
-
-## ✨ Overview
-
-**GhostWave** brings **NVIDIA's RTX Voice–style AI noise cancellation** to Linux with professional-grade audio processing capabilities. Built specifically for modern Linux audio stacks and optimized for real-time performance.
-
-### Key Highlights
-- 🎮 **Gaming Ready** - Discord, Steam, OBS integration
-- 🎤 **Content Creation** - Streaming & Podcasting workflows
-- 💼 **Professional Audio** - Zoom, Teams, Meet compatibility
-- 🔧 **Developer Friendly** - Rust crate for integration
-- ⚡ **Sub-15ms Latency** - Real-time processing guaranteed
-
-Built on **NVIDIA's open Linux drivers** with first-class **Wayland support**, GhostWave delivers studio-grade voice clarity without compromising system stability.
+<p align="center">
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Rust_1.95+-F74C00?style=for-the-badge&logo=rust&logoColor=white" alt="Rust 1.95+">
+  <img src="https://img.shields.io/badge/NVIDIA_RTX-76B900?style=for-the-badge&logo=nvidia&logoColor=white" alt="NVIDIA RTX Optimized">
+  <img src="https://img.shields.io/badge/CUDA-76B900?style=for-the-badge&logo=nvidia&logoColor=white" alt="CUDA">
+  <img src="https://img.shields.io/badge/Linux_Native-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux Native">
+  <img src="https://img.shields.io/badge/PipeWire-00A8E8?style=for-the-badge&logo=linux&logoColor=white" alt="PipeWire">
+  <img src="https://img.shields.io/badge/Wayland-FFB800?style=for-the-badge&logo=wayland&logoColor=black" alt="Wayland">
+  <img src="https://img.shields.io/badge/ONNX_Runtime-005CED?style=for-the-badge&logo=onnx&logoColor=white" alt="ONNX Runtime">
+</p>
 
 ---
 
-## 🚀 Features
-
-### Audio Processing
-- 🤖 **RTX-Accelerated AI Noise Suppression** - GPU-powered real-time denoising
-- 🎛️ **Multiple Profiles** - Balanced, Streaming, Studio configurations
-- 📊 **Advanced DSP Pipeline** - Lock-free audio buffers, real-time scheduling
-- 🎯 **Ultra-Low Latency** - <15ms processing target with professional audio interfaces
-
-### System Integration
-- 🖥️ **Wayland Native** - KDE Plasma, GNOME, Hyprland, Sway support
-- 🔗 **Multiple Audio Backends** - PipeWire, ALSA, JACK, CPAL
-- 🎚️ **Hardware Detection** - Auto-configuration for XLR interfaces (Scarlett Solo 4th Gen)
-- ⚙️ **SystemD Integration** - Service management and auto-startup
-
-### Developer Features
-- 📦 **Modular Crate Design** - `ghostwave-core` library for embedding
-- 🔌 **JSON-RPC API** - IPC integration for external control
-- 🧪 **Performance Benchmarking** - Built-in audio latency testing
-- 🔧 **Feature Flags** - Conditional compilation for different backends
+> **Status: Open Beta**
+>
+> GhostWave provides a working real-time DSP pipeline with PipeWire integration.
+> GPU-accelerated neural inference is under development. The current release uses
+> CPU-based spectral processing for noise reduction.
 
 ---
 
-## 🔧 Installation
+## What It Does
+
+GhostWave creates a virtual audio source ("GhostWave Clean") in PipeWire that applies
+real-time noise reduction to your microphone input. Applications see it as a regular
+audio device.
+
+### Working Features
+- **DSP Processing Pipeline** — High-pass filter, voice activity detection, spectral
+  denoising, noise gate/expander, soft limiter with lookahead
+- **PipeWire Filter Node** — Appears as a virtual audio source in any application
+- **Multiple Audio Backends** — PipeWire (recommended), ALSA, JACK, CPAL
+- **Processing Profiles** — Balanced, Streaming, Studio configurations
+- **NVIDIA GPU Detection** — Detects RTX capabilities, compute architecture, driver version
+- **Hardware Auto-Detection** — XLR interface identification (Scarlett Solo, etc.)
+- **JSON-RPC IPC** — Remote control over UNIX sockets
+- **VST3/CLAP Plugin** — Plugin shell with GUI (via nih-plug + egui)
+- **SystemD Integration** — User service for auto-startup
+- **CLI Tools** — System diagnostics (`--doctor`), benchmarking (`--bench`)
+
+### In Development
+- Neural network inference (RNNoise-style model loading and execution)
+- CUDA kernel integration for GPU-accelerated denoising
+- TensorRT engine support
+- ONNX Runtime model inference
+- Full VST plugin audio processing pipeline
+
+---
+
+## Installation
 
 ### Prerequisites
-- **NVIDIA GPU** with RTX 20+ series (RTX 2060 or better)
-  - **Best Performance**: RTX 50 series (Blackwell) with 5th-gen Tensor Cores
-- **NVIDIA Open Driver ≥ 580** (Required for RTX 50 series, ≥ 555 for older)
-- **Audio System**: PipeWire (recommended) or PulseAudio
-- **CUDA Runtime** libraries for GPU acceleration
+- **Linux** with PipeWire (PulseAudio compatibility layer works too)
+- **Rust 1.85+** (2024 edition)
+- **Optional**: NVIDIA GPU with CUDA for future GPU acceleration
 
 ### System Dependencies
 ```bash
 # Arch Linux
-sudo pacman -S nvidia-open cuda pipewire pipewire-pulse wireplumber
+sudo pacman -S pipewire pipewire-pulse wireplumber alsa-lib
 
 # Ubuntu/Debian
-sudo apt install nvidia-driver-XXX nvidia-cuda-toolkit pipewire-bin
+sudo apt install pipewire pipewire-pulse wireplumber libasound2-dev
 
 # Fedora
-sudo dnf install nvidia-driver cuda-runtime pipewire
+sudo dnf install pipewire pipewire-pulseaudio wireplumber alsa-lib-devel
 ```
 
-### From Source
+### Build from Source
 ```bash
 git clone https://github.com/ghostkellz/ghostwave
 cd ghostwave
 cargo build --release
 
-# Optional: Set real-time audio privileges
+# Optional: enable real-time audio privileges
 sudo setcap cap_sys_nice+ep ./target/release/ghostwave
 ```
 
+### Arch Linux (PKGBUILD)
+```bash
+cd release/arch
+makepkg -si
+```
+
+---
+
+## Usage
+
 ### Quick Start
 ```bash
-# System diagnostics
-./ghostwave --doctor
+# Run system diagnostics
+ghostwave --doctor
+
+# Start PipeWire filter node (recommended)
+ghostwave --pipewire-module --profile balanced
 
 # Performance benchmark
-./ghostwave --bench --profile studio
-
-# Start with PipeWire integration
-./ghostwave --pipewire-module --profile balanced
+ghostwave --bench --profile studio
 ```
 
----
-
-## 🎮 Usage
-
-### Basic Operation
+### Profiles
 ```bash
-# Start with default settings
-ghostwave
+# Balanced: 48kHz, 128 frames, moderate noise reduction
+ghostwave --profile balanced
 
-# Use studio profile for content creation
-ghostwave --profile studio --verbose
+# Streaming: 48kHz, 128 frames, aggressive noise reduction
+ghostwave --profile streaming
 
-# ALSA direct mode for minimal latency
+# Studio: 96kHz, 256 frames, gentle processing
+ghostwave --profile studio
+```
+
+### Backend Selection
+```bash
+# ALSA direct mode
 ghostwave --alsa --frames 64 --samplerate 48000
 
-# JACK integration for professional workflows
+# JACK integration
 ghostwave --jack --profile studio
+
+# PipeWire module mode (creates virtual device)
+ghostwave --pipewire-module
 ```
 
-### PhantomLink Integration
+### Integration
 ```bash
-# Start as PhantomLink audio device
-ghostwave --phantomlink --profile streaming
-
 # IPC server for external control
 ghostwave --ipc-server --profile balanced
-```
 
-### Service Management
-```bash
-# Install as system service
-sudo ghostwave --install-systemd
+# PhantomLink integration
+ghostwave --phantomlink --profile streaming
 
-# Service control
-ghostwave --service-start
-ghostwave --service-status
-ghostwave --service-stop
+# Install as systemd user service
+ghostwave --install-systemd
+systemctl --user enable --now ghostwave
 ```
 
 ---
 
-## 🏗️ Architecture
+## Configuration
 
-GhostWave is built with a modular architecture optimizing for both performance and flexibility:
+Default config location: `~/.config/ghostwave/`
+
+See [`examples/config.toml`](examples/config.toml) for all available options including:
+- Audio device and backend selection
+- DSP pipeline parameters (VAD, gate, limiter, high-pass)
+- Noise suppression strength and thresholds
+- IPC server settings
+- Performance tuning (real-time priority, CPU affinity, buffer sizes)
+
+---
+
+## Architecture
 
 ```
 ghostwave/
-├── ghostwave-core/          # Core audio processing library
-│   ├── noise_suppression    # RTX-accelerated denoising
-│   ├── low_latency         # Real-time optimizations
-│   ├── device_detection    # Hardware auto-configuration
-│   └── backends/           # Audio system integrations
-│       ├── pipewire.rs     # Modern Linux audio
-│       ├── alsa.rs         # Direct hardware access
-│       ├── jack.rs         # Professional workflows
-│       └── cpal.rs         # Cross-platform fallback
-└── src/                    # CLI application
-    ├── phantomlink.rs      # Virtual audio device
-    ├── ipc.rs             # JSON-RPC API server
-    └── systemd.rs         # Service integration
+├── ghostwave-core/          # Core DSP library (rlib + cdylib + staticlib)
+│   ├── processor.rs         # Main audio processing pipeline
+│   ├── dsp_pipeline.rs      # HPF → VAD → Denoise → Gate → Limiter
+│   ├── noise_suppression.rs # Spectral noise reduction
+│   ├── pipewire_integration.rs  # PipeWire filter node
+│   ├── device_detection.rs  # Hardware auto-configuration
+│   ├── ai_denoise/          # Neural inference framework (in development)
+│   └── rtx_acceleration.rs  # GPU capability detection
+├── ghostwave-vst/           # VST3/CLAP plugin (nih-plug + egui)
+└── src/                     # CLI application
+    ├── main.rs              # Argument parsing and run modes
+    ├── ipc.rs               # JSON-RPC server
+    ├── pipewire_module.rs   # PipeWire integration entry point
+    └── phantomlink.rs       # PhantomLink bridge
 ```
-
-### Performance Optimizations
-- **Lock-free ring buffers** for zero-copy audio
-- **Real-time thread scheduling** with FIFO priority
-- **Memory pools** to eliminate allocations in audio path
-- **SIMD optimizations** for CPU processing fallback
-
----
-
-## 📊 Performance
-
-### Benchmark Results
-Tested on **Arch Linux** with **Scarlett Solo 4th Gen** XLR interface:
-
-| Configuration | Latency | CPU Usage | XRun Rate |
-|---------------|---------|-----------|-----------|
-| Studio (256 frames) | 1.33ms | 12% | 0.001% |
-| Balanced (512 frames) | 2.67ms | 8% | 0.000% |
-| Streaming (1024 frames) | 5.33ms | 4% | 0.000% |
-
-### Hardware Requirements
-- **Minimum**: RTX 2060, 8GB RAM, 4-core CPU
-  - Latency: ~15ms | Tensor Cores: 2nd Gen
-- **Recommended**: RTX 3070+, 16GB RAM, 8-core CPU
-  - Latency: ~10ms | Tensor Cores: 3rd Gen
-- **High-End**: RTX 4080+, 32GB RAM, Ryzen 7/Intel i7+
-  - Latency: ~7ms | Tensor Cores: 4th Gen
-- **Elite** (NEW): RTX 5090, 32GB+ RAM, Ryzen 9/Intel i9+
-  - Latency: <5ms | Tensor Cores: 5th Gen with FP4 precision
-  - **2-3x faster AI inference** vs RTX 40 series
-  - **Perfect for ASUS ROG Astral RTX 5090** with 32GB GDDR7
-
----
-
-## 🔗 Integration
 
 ### As a Rust Crate
-Add to your `Cargo.toml`:
 ```toml
 [dependencies]
-ghostwave-core = { git = "https://github.com/ghostkellz/ghostwave", features = ["pipewire-backend", "nvidia-rtx"] }
-```
-
-### Example Usage
-```rust
-use ghostwave_core::{Config, NoiseProcessor, AudioBackend};
-
-// Create processor with RTX acceleration
-let config = Config::load("studio")?;
-let mut processor = NoiseProcessor::new(&config.noise_suppression)?;
-
-// Process audio buffer
-let input = vec![0.1f32; 1024];
-let mut output = vec![0.0f32; 1024];
-processor.process(&input, &mut output)?;
-```
-
-See [INTEGRATION.md](INTEGRATION.md) for complete integration guide.
-
----
-
-## 📚 Documentation
-
-- [**DOCS.md**](DOCS.md) - Complete technical documentation
-- [**INTEGRATION.md**](INTEGRATION.md) - Crate integration guide
-- [**PIPEWIRE.md**](PIPEWIRE.md) - PipeWire module setup
-- [**ALSA.md**](ALSA.md) - ALSA direct integration
-- [**NVIDIA.md**](NVIDIA.md) - RTX acceleration setup
-
----
-
-## 🛠️ Development
-
-### Building from Source
-```bash
-# Debug build with all features
-cargo build --features "pipewire-backend,alsa-backend,jack-backend,nvidia-rtx"
-
-# Release build optimized for target CPU
-RUSTFLAGS="-C target-cpu=native" cargo build --release
-
-# Test suite
-cargo test --all-features
+ghostwave-core = { git = "https://github.com/ghostkellz/ghostwave" }
 ```
 
 ### Feature Flags
-```toml
-default = ["cpal-backend"]
-pipewire-backend = ["pipewire"]
-alsa-backend = ["alsa"]
-jack-backend = ["jack"]
-nvidia-rtx = ["cudarc"]
-full = ["pipewire-backend", "alsa-backend", "jack-backend", "nvidia-rtx"]
-```
+| Feature | Description |
+|---------|-------------|
+| `cpal-backend` (default) | Cross-platform audio via CPAL |
+| `pipewire-backend` | PipeWire native integration |
+| `alsa-backend` | Direct ALSA hardware access |
+| `jack-backend` | JACK professional audio |
+| `nvidia-rtx` | CUDA GPU detection and acceleration |
+| `onnx-inference` | ONNX Runtime model inference |
+| `full` | All backends and GPU features |
 
 ---
 
-## 🤝 Contributing
+## Documentation
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+See the [`docs/`](docs/README.md) directory:
 
-### Areas of Interest
-- **RTX Voice Model Integration** - Improved AI models
-- **Additional Audio Interfaces** - Hardware-specific optimizations
-- **Mobile/Embedded Support** - ARM64 optimizations
-- **GUI Applications** - Desktop control interfaces
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+- [PipeWire](docs/backends/pipewire.md) — PipeWire module setup
+- [ALSA](docs/backends/alsa.md) — Direct ALSA integration
+- [NVIDIA](docs/gpu/nvidia.md) — GPU acceleration setup
+- [Architecture](docs/development/architecture.md) — System design
+- [Performance](docs/development/performance.md) — Tuning and benchmarking
+- [API Reference](docs/development/api-reference.md) — Library API
+- [Known Gaps](docs/known-gaps.md) — Current limitations
+- [Troubleshooting](docs/troubleshooting.md) — Common issues
 
 ---
 
-## 🙏 Acknowledgments
+## Contributing
 
-- **NVIDIA** for RTX Voice inspiration and CUDA toolkit
-- **PipeWire** team for modern Linux audio architecture
-- **Focusrite** for excellent XLR interface documentation
-- **Rust Audio** community for audio processing libraries
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

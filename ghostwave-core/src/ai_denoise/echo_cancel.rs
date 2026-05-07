@@ -158,7 +158,7 @@ impl AcousticEchoCanceller {
 
         // Number of filter blocks for partitioned convolution
         let tail_samples = (config.tail_length_ms as usize * config.sample_rate as usize) / 1000;
-        let num_blocks = (tail_samples + config.frame_size - 1) / config.frame_size;
+        let num_blocks = tail_samples.div_ceil(config.frame_size);
 
         debug!(
             "AEC initialized: {}ms tail = {} blocks of {} samples",
@@ -332,8 +332,11 @@ impl AcousticEchoCanceller {
         }
 
         // Overlap-add
-        for i in 0..frame_size {
-            output[i] = self.overlap_buffer[i] + self.output_buffer[i];
+        for (out, (&overlap, &buf)) in output.iter_mut()
+            .zip(self.overlap_buffer.iter().zip(self.output_buffer.iter()))
+            .take(frame_size)
+        {
+            *out = overlap + buf;
         }
 
         // Save second half for next frame
@@ -422,14 +425,14 @@ impl AcousticEchoCanceller {
         // Compute total power across all blocks for normalization
         let mut total_power = vec![self.config.regularization; self.freq_size];
         for block in &self.filter_blocks {
-            for i in 0..self.freq_size {
-                total_power[i] += block.power[i];
+            for (tp, &p) in total_power.iter_mut().zip(block.power.iter()) {
+                *tp += p;
             }
         }
 
         // Smooth power estimate
-        for i in 0..self.freq_size {
-            self.power_smooth[i] = 0.95 * self.power_smooth[i] + 0.05 * total_power[i];
+        for (ps, &tp) in self.power_smooth.iter_mut().zip(total_power.iter()) {
+            *ps = 0.95 * *ps + 0.05 * tp;
         }
 
         // Update each filter block
@@ -488,12 +491,12 @@ impl AcousticEchoCanceller {
     /// Apply non-linear processing for residual echo suppression
     fn apply_nlp(&mut self, spectrum: &mut [Complex<f32>]) {
         // Compute coherence between error and echo
-        for i in 0..self.freq_size {
-            let error_power = spectrum[i].norm_sqr().max(1e-10);
+        for (i, spec) in spectrum.iter_mut().enumerate().take(self.freq_size) {
+            let error_power = spec.norm_sqr().max(1e-10);
             let echo_power = self.echo_spectrum[i].norm_sqr().max(1e-10);
 
             // Cross-spectral density
-            let cross = (spectrum[i] * self.echo_spectrum[i].conj()).re;
+            let cross = (*spec * self.echo_spectrum[i].conj()).re;
 
             // Coherence estimate (smoothed)
             let instant_coherence = (cross.abs() / (error_power * echo_power).sqrt()).clamp(0.0, 1.0);
@@ -510,7 +513,7 @@ impl AcousticEchoCanceller {
             self.suppression_gain[i] = 0.8 * self.suppression_gain[i] + 0.2 * suppression;
 
             // Apply suppression
-            spectrum[i] *= self.suppression_gain[i];
+            *spec *= self.suppression_gain[i];
         }
     }
 

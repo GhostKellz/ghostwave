@@ -99,12 +99,18 @@ pub struct RtPriorityManager {
     original_priority: i32,
 }
 
-impl RtPriorityManager {
-    pub fn new() -> Self {
+impl Default for RtPriorityManager {
+    fn default() -> Self {
         Self {
             priority_set: AtomicBool::new(false),
             original_priority: 0,
         }
+    }
+}
+
+impl RtPriorityManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Set real-time priority with graceful fallback
@@ -185,12 +191,10 @@ impl RtPriorityManager {
     pub fn optimize_thread(&self) -> Result<()> {
         // Disable CPU frequency scaling if possible
         #[cfg(target_os = "linux")]
+        if let Ok(governor) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+            && governor.trim() != "performance"
         {
-            if let Ok(governor) = std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") {
-                if !governor.trim().eq("performance") {
-                    warn!("CPU governor is '{}', consider setting to 'performance' for lowest latency", governor.trim());
-                }
-            }
+            warn!("CPU governor is '{}', consider setting to 'performance' for lowest latency", governor.trim());
         }
 
         // Set thread name

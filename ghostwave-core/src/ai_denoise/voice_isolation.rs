@@ -518,9 +518,9 @@ impl VoiceIsolator {
 
             // Voice frequency band weighting
             let freq = k as f32 * self.config.sample_rate as f32 / self.fft_size as f32;
-            let voice_weight = if freq > 85.0 && freq < 4000.0 {
+            let voice_weight = if (85.0..4000.0).contains(&freq) {
                 1.0
-            } else if freq < 85.0 || freq > 8000.0 {
+            } else if !(85.0..=8000.0).contains(&freq) {
                 0.3
             } else {
                 0.7
@@ -621,9 +621,9 @@ impl VoiceIsolator {
             let freq = k as f32 * self.config.sample_rate as f32 / self.fft_size as f32;
 
             // Voice frequency band weighting
-            let voice_weight = if freq > 80.0 && freq < 4000.0 {
+            let voice_weight = if (80.0..4000.0).contains(&freq) {
                 1.0
-            } else if freq < 80.0 || freq > 8000.0 {
+            } else if !(80.0..=8000.0).contains(&freq) {
                 0.3
             } else {
                 0.7
