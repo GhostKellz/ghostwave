@@ -1,6 +1,6 @@
 # Maintainer: Christopher Kelley <ckelley@ghostkellz.sh>
 pkgname=ghostwave
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Real-time audio processing with DSP pipeline and PipeWire integration for Linux"
 arch=('x86_64')

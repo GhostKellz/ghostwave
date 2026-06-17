@@ -2,7 +2,8 @@
 //!
 //! Run with: cargo bench --bench latency
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use std::hint::black_box;
 use ghostwave_core::{Config, GhostWaveProcessor};
 
 fn process_frames_benchmark(c: &mut Criterion) {

@@ -296,7 +296,7 @@ impl CudaRuntime {
 
         for path in &search_paths {
             debug!("Trying to load CUDA from: {}", path);
-            match unsafe { Library::new(path) } {
+            match unsafe { Library::new(*path) } {
                 Ok(lib) => {
                     info!("Loaded CUDA library from: {}", path);
                     return Ok(lib);

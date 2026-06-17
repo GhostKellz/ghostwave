@@ -8,7 +8,8 @@
 //! - Model weight operations
 //! - Different model sizes
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+use std::hint::black_box;
 use ghostwave_core::ai_denoise::{RNNoiseModelWeights, ModelSize};
 
 /// Benchmark model weight creation for different sizes
@@ -108,23 +109,22 @@ fn bench_cpu_inference_simulation(c: &mut Criterion) {
 
         // Simulate input features (42 bark bands)
         let input_features: Vec<f32> = (0..42).map(|i| (i as f32 * 0.01).sin()).collect();
-        let mut hidden_state = vec![0.0f32; hidden];
-        let mut output = vec![0.0f32; 23];
-
         // Throughput in audio frames (10ms at 48kHz = 480 samples)
         group.throughput(Throughput::Elements(480));
 
         group.bench_with_input(
             BenchmarkId::new("gru_forward", name),
-            &(&weights, &input_features, &mut hidden_state, &mut output),
-            |b, &(weights, input, hidden, out)| {
+            &(&weights, &input_features),
+            |b, &(weights, input)| {
+                let mut hidden_state = vec![0.0f32; hidden];
+                let mut output = vec![0.0f32; 23];
                 b.iter(|| {
                     // Simulate GRU forward pass (simplified - real impl uses SIMD)
                     cpu_gru_forward_simulation(
                         black_box(weights),
                         black_box(input),
-                        black_box(hidden),
-                        black_box(out),
+                        black_box(&mut hidden_state),
+                        black_box(&mut output),
                     );
                 });
             },
@@ -224,7 +224,6 @@ fn bench_simd_ops(c: &mut Criterion) {
     for &size in &sizes {
         let a: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).sin()).collect();
         let b: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).cos()).collect();
-        let mut c = vec![0.0f32; size];
 
         group.throughput(Throughput::Elements(size as u64));
 
@@ -240,20 +239,22 @@ fn bench_simd_ops(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::new("vector_add", size),
-            &(&a, &b, &mut c),
-            |bench, &(a, b, c)| {
+            &(&a, &b),
+            |bench, &(a, b)| {
+                let mut c = vec![0.0f32; size];
                 bench.iter(|| {
-                    vector_add_scalar(black_box(a), black_box(b), black_box(c));
+                    vector_add_scalar(black_box(a), black_box(b), black_box(&mut c));
                 });
             },
         );
 
         group.bench_with_input(
             BenchmarkId::new("sigmoid", size),
-            &(&a, &mut c),
-            |bench, &(a, c)| {
+            &(&a,),
+            |bench, &(a,)| {
+                let mut c = vec![0.0f32; size];
                 bench.iter(|| {
-                    sigmoid_scalar(black_box(a), black_box(c));
+                    sigmoid_scalar(black_box(a), black_box(&mut c));
                 });
             },
         );
@@ -301,25 +302,24 @@ fn bench_audio_frame_processing(c: &mut Criterion) {
         let audio_input: Vec<f32> = (0..frame_size)
             .map(|i| (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / 48000.0).sin() * 0.5)
             .collect();
-        let mut audio_output = vec![0.0f32; frame_size];
-
         // Simulate feature extraction + inference + output
         let input_features: Vec<f32> = (0..42).map(|i| (i as f32 * 0.01).sin()).collect();
-        let mut hidden_state = vec![0.0f32; hidden];
-        let mut gains = vec![0.0f32; 23];
 
         group.bench_with_input(
             BenchmarkId::new("full_pipeline", label),
-            &(&weights, &audio_input, &mut audio_output, &input_features, &mut hidden_state, &mut gains),
-            |bench, &(weights, audio_in, audio_out, features, hidden, gains)| {
+            &(&weights, &audio_input, &input_features),
+            |bench, &(weights, audio_in, features)| {
+                let mut audio_out = vec![0.0f32; frame_size];
+                let mut hidden_state = vec![0.0f32; hidden];
+                let mut gains = vec![0.0f32; 23];
                 bench.iter(|| {
                     // 1. Feature extraction (simulated)
                     // 2. Neural network inference
                     cpu_gru_forward_simulation(
                         black_box(weights),
                         black_box(features),
-                        black_box(hidden),
-                        black_box(gains),
+                        black_box(&mut hidden_state),
+                        black_box(&mut gains),
                     );
                     // 3. Apply gains to audio (simulated)
                     for (out, &inp) in audio_out.iter_mut().zip(audio_in.iter()) {

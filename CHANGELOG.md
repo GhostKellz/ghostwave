@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.1] - 2026-06-17
+
+### Changed
+- Updated all dependencies to their latest verified versions, including major bumps: `toml` 0.8 → 1.1, `dirs` 5 → 6, `notify` 6 → 8, `pipewire`/`libspa` → 0.10, `cpal` → 0.18, `nnnoiseless` 0.3 → 0.5, `criterion` → 0.8, `libloading` → 0.9, and `ndarray` → 0.17.
+- Migrated code for breaking API changes in `pipewire` (Timeout enum for `iterate`), `cpal` (config passed by value), `libloading` (`AsFilename`), and `criterion` (`std::hint::black_box`, `bench_with_input` borrow changes).
+
+### Security
+- Resolved RUSTSEC-2021-0139 (`ansi_term` unmaintained) by switching `nnnoiseless` to `default-features = false`, dropping its `clap` 2.x / `atty` / `ansi_term` CLI stack.
+- Documented remaining transitive `atty` advisories (RUSTSEC-2024-0375, RUSTSEC-2021-0145) from the `nih-plug` VST framework as knowingly accepted; they do not affect `ghostwave-core` or the standalone binary.
+
+### Added
+- `deny.toml` for `cargo deny` checks, kept in sync with the advisories docs.
+- `docs/advisories/` section (accepted + resolved) and a Security entry in the docs index.
+- `.github/dependabot.yml` (cargo + github-actions, weekly) and enabled Dependabot alerts / automated security fixes.
+
 ## [0.2.0] - 2025-12-03
 
 ### Added

@@ -932,7 +932,7 @@ impl AudioStream {
             while !stop_flag.load(Ordering::Relaxed) {
                 // Iterate the main loop with a short timeout
                 let timeout_ms = 50;
-                loop_ref.iterate(std::time::Duration::from_millis(timeout_ms));
+                loop_ref.iterate(pw::loop_::Timeout::Finite(std::time::Duration::from_millis(timeout_ms)));
             }
 
             // Clean up

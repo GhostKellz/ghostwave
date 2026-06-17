@@ -1,0 +1,60 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Run: cargo deny check
+
+[graph]
+targets = []
+all-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+# Accepted advisories are documented in docs/advisories/accepted.md. Each ID
+# below MUST have a matching entry there so the gate and docs stay in sync.
+# Both come from `atty`, pulled in transitively by the nih-plug VST framework
+# (ghostwave-vst only); they do not affect ghostwave-core or the standalone
+# binary.
+ignore = [
+    "RUSTSEC-2024-0375", # atty unmaintained -> nih_log -> nih_plug -> ghostwave-vst
+    "RUSTSEC-2021-0145", # atty unaligned read (Windows) -> same chain
+]
+
+[licenses]
+# GhostWave is MIT; allow MIT-compatible dependency licenses.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# nih-plug is only available as a git dependency (VST3/CLAP framework).
+allow-git = ["https://github.com/robbert-vdh/nih-plug.git"]

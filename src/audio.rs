@@ -74,7 +74,7 @@ pub async fn run_standalone(config: Config) -> Result<()> {
     info!("Stream config: {:?}", stream_config);
 
     let input_stream = input_device.build_input_stream(
-        &stream_config,
+        stream_config.clone(),
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             debug!("Processing {} samples", data.len());
         },
@@ -85,7 +85,7 @@ pub async fn run_standalone(config: Config) -> Result<()> {
     )?;
 
     let output_stream = output_device.build_output_stream(
-        &stream_config,
+        stream_config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
             for sample in data.iter_mut() {
                 *sample = 0.0;

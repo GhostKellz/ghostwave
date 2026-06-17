@@ -28,6 +28,12 @@ Building, testing, and contributing.
 - [Deployment](development/deployment.md) — Packaging and distribution
 - [Performance](development/performance.md) — Benchmarking and tuning
 
+## Security
+Dependency advisory tracking, kept in sync with `deny.toml`.
+
+- [Accepted Advisories](advisories/accepted.md) — Knowingly accepted advisories (`atty` via the VST framework)
+- [Resolved Advisories](advisories/resolved.md) — Advisories cleared by dependency updates
+
 ## Reference
 - [Known Gaps](known-gaps.md) — Current limitations and planned work
 - [Troubleshooting](troubleshooting.md) — Common issues and solutions
